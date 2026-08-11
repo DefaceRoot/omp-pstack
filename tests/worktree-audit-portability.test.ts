@@ -10,8 +10,9 @@
  *   - active agent_dir from `omp config path` (named profiles: sessions under
  *     <agent_dir>/sessions); applicable named-profile XDG data root
  *     $XDG_DATA_HOME/omp/profiles/<profile>/sessions (OMP_PROFILE canonical,
- *     PI_PROFILE fallback) without default-profile leakage; omp config path
- *     failure is fail-closed
+ *     PI_PROFILE fallback) without default-profile leakage; the explicit
+ *     OMP/PI sentinel `default` uses $XDG_DATA_HOME/omp/sessions (not
+ *     .../profiles/default/sessions); omp config path failure is fail-closed
  *   - acceptance: recent matching transcript must be detected on GNU/Linux;
  *     timestamp-read failure must be fail-closed / not-safe (not recent=no);
  *     matching session header read/jq parse failure and transcript find/
@@ -837,4 +838,68 @@ test("scratch-only untracked file stays scratch but never safe", () => {
 	// Non-safe hold/review: never the prune-safe bucket.
 	expect(row.bucket).not.toBe("safe");
 	expect(["review", "hold-wip"]).toContain(row.bucket);
+});
+
+test("OMP_PROFILE=default uses default XDG sessions root not profiles/default", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const defaultSessions = join(xdgDataHome, "omp", "sessions");
+	const wrongProfileSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		"default",
+		"sessions",
+	);
+	const agentDir = join(fixture.home, ".omp", "agent");
+
+	// Empty wrong root: treating "default" as a named profile would scan here.
+	mkdirSync(wrongProfileSessions, { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+
+	// Independent source of truth: OMP_PROFILE=default is the explicit default
+	// sentinel, so the applicable XDG root is $XDG_DATA_HOME/omp/sessions.
+	writeSessionTranscript(defaultSessions, fixture.worktree, {
+		id: "omp-default-sentinel-session",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		OMP_PROFILE: "default",
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	// Current fallthrough uses .../profiles/default/sessions and fails open.
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("PI_PROFILE=default fallback uses default XDG sessions root not profiles/default", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const defaultSessions = join(xdgDataHome, "omp", "sessions");
+	const wrongProfileSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		"default",
+		"sessions",
+	);
+	const agentDir = join(fixture.home, ".omp", "agent");
+
+	mkdirSync(wrongProfileSessions, { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+
+	writeSessionTranscript(defaultSessions, fixture.worktree, {
+		id: "pi-default-sentinel-session",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		PI_PROFILE: "default",
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
 });
