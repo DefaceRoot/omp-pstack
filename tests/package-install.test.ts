@@ -93,6 +93,9 @@ const REQUIRED_STALE_SYMLINK_CLEANUP_CLAUSE =
 	"After uninstall, run `omp plugin doctor` to obtain plugins_directory. If the stale symlink remains, manually remove only `<plugins_directory>/node_modules/@defaceroot/omp-pstack`.";
 const STALE_SYMLINK_PATH =
 	"<plugins_directory>/node_modules/@defaceroot/omp-pstack";
+/** Exact safe stale-symlink cleanup command — no wildcard/recursive flags. */
+const STALE_SYMLINK_RM_COMMAND =
+	'rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"';
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
@@ -129,13 +132,22 @@ function normalizeWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-function extractFencedBlocks(markdown: string): string[] {
-	const blocks: string[] = [];
-	const re = /```[^\n]*\n([\s\S]*?)```/g;
+function extractFencedBlocksWithLang(
+	markdown: string,
+): Array<{ lang: string; body: string }> {
+	const blocks: Array<{ lang: string; body: string }> = [];
+	const re = /```([^\n]*)\n([\s\S]*?)```/g;
 	for (const match of markdown.matchAll(re)) {
-		blocks.push(match[1] ?? "");
+		blocks.push({
+			lang: (match[1] ?? "").trim().toLowerCase(),
+			body: match[2] ?? "",
+		});
 	}
 	return blocks;
+}
+
+function extractFencedBlocks(markdown: string): string[] {
+	return extractFencedBlocksWithLang(markdown).map((block) => block.body);
 }
 
 /** Non-empty whitespace-normalized lines from all fenced code/example blocks. */
@@ -144,6 +156,35 @@ function fencedExampleLines(markdown: string): string[] {
 		.flatMap((block) => block.split("\n"))
 		.map((line) => normalizeWhitespace(line))
 		.filter((line) => line.length > 0);
+}
+
+/**
+ * One fenced sh block must contain doctor then the exact safe rm command in order.
+ * Rejects deleted/reordered/replaced rm and wildcard/recursive rm flags.
+ */
+function findOrderedStaleSymlinkCleanupBlock(
+	markdown: string,
+): { lang: string; lines: string[] } | undefined {
+	for (const block of extractFencedBlocksWithLang(markdown)) {
+		if (block.lang !== "sh" && block.lang !== "bash") continue;
+		const lines = block.body
+			.split("\n")
+			.map((line) => normalizeWhitespace(line))
+			.filter((line) => line.length > 0);
+		const doctorIndex = lines.indexOf("omp plugin doctor");
+		const rmIndex = lines.indexOf(STALE_SYMLINK_RM_COMMAND);
+		if (doctorIndex < 0 || rmIndex < 0 || rmIndex <= doctorIndex) continue;
+
+		const unsafeRm = lines.some(
+			(line) =>
+				/\brm\b/.test(line) &&
+				(/[*?]/.test(line) ||
+					/(^|\s)(-[a-zA-Z]*[rR]|--recursive)(\s|$)/.test(line)),
+		);
+		if (unsafeRm) continue;
+		return { lang: block.lang, lines };
+	}
+	return undefined;
 }
 
 function collectLicenseTexts(): Array<{ path: string; text: string }> {
@@ -260,10 +301,9 @@ test("README polarity-binds cleanup to the generated model rule and preserves us
 test("README pins OMP 17.2.13 remote/local uninstall and stale symlink cleanup", () => {
 	const readme = readReadme();
 	const normalized = normalizeWhitespace(readme);
-	const lines = fencedExampleLines(readme);
 
-	// Replace the previous false combined clause: remote managed copy is removed
-	// cleanly, while local-link uninstall may leave the node_modules symlink.
+	// Exact semantic clauses: remote clean managed-copy removal; local-link may leave
+	// the node_modules symlink while always preserving checkout.
 	expect(normalized).toContain(
 		normalizeWhitespace(REQUIRED_REMOTE_UNINSTALL_CLAUSE),
 	);
@@ -273,11 +313,19 @@ test("README pins OMP 17.2.13 remote/local uninstall and stale symlink cleanup",
 	expect(normalized).toContain(
 		normalizeWhitespace(REQUIRED_STALE_SYMLINK_CLEANUP_CLAUSE),
 	);
-
-	// Doctor discovers plugins_directory; only the stale scoped symlink is removed.
-	expect(lines).toContain("omp plugin doctor");
-	expect(normalized).toContain("plugins_directory");
 	expect(normalized).toContain(normalizeWhitespace(STALE_SYMLINK_PATH));
+
+	// One fenced sh block must contain the safe command order exactly:
+	// omp plugin doctor → rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"
+	// Fails if rm is deleted, reordered before doctor, replaced, or made recursive/wildcard.
+	const cleanupBlock = findOrderedStaleSymlinkCleanupBlock(readme);
+	expect(cleanupBlock).toBeDefined();
+	expect(cleanupBlock!.lang).toBe("sh");
+	expect(cleanupBlock!.lines).toContain("omp plugin doctor");
+	expect(cleanupBlock!.lines).toContain(STALE_SYMLINK_RM_COMMAND);
+	expect(cleanupBlock!.lines.indexOf("omp plugin doctor")).toBeLessThan(
+		cleanupBlock!.lines.indexOf(STALE_SYMLINK_RM_COMMAND),
+	);
 });
 
 test("README links canonical upstream sources and root licensing retains separate Lauren Tan and Cursor notices", () => {
