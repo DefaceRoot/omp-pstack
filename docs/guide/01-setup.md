@@ -20,7 +20,7 @@ Run:
 /setup-pstack
 ```
 
-[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) runs `omp config path` to resolve the active profile's `agent_dir`, then runs `omp models --json`, shows every role and review panel, and asks what you want using selectors OMP actually reported. It writes `<agent_dir>/rules/pstack-models.md`, the generated rule read by `pstack_task`.
+[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) runs `omp config path` to resolve the active profile's `agent_dir`, then runs `omp models --json`, shows every role and review panel, and asks what you want using selectors OMP actually reported. It writes `<agent_dir>/rules/pstack-models.md`. The active always-applied pstack model rule is loaded into a new session's system prompt when OMP starts that session. Routed skills select roles and pass selected model overrides to `pstack_task`.
 
 A missing role uses `auto`. To restore defaults, rerun `/setup-pstack` or use `/pstack-cleanup` to remove exactly that generated `<agent_dir>/rules/pstack-models.md` file.
 
