@@ -25,7 +25,7 @@ Resolve what is in scope vs explicitly out, technical or platform constraints, p
 Delegate codebase exploration (`skill://principle-guard-the-context-window`).
 
 - For one direct delegate, call lowercase `task` with `agent: "poteto-agent"`. For parallel exploration, call `pstack_task` with `strategy: "slice"`; its OMP subprocesses load the same wrapper. Do not dispatch the bundled planning agent because this workflow owns the plan.
-- Pass validated `model` selectors from `~/.omp/agent/rules/pstack-models.md`; default to `auto`.
+- Pass validated `model` selectors from the relevant named role in the active always-applied pstack model rule already present in the OMP system prompt; default to `auto` when that role is absent.
 
 Each explorer returns file pointers, conventions, dependencies, test infrastructure, and entry points. No inlined dumps.
 

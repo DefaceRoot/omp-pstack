@@ -25,7 +25,7 @@ The N candidates will receive the same prompt, so the prompt is the contract. Ge
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. Concrete: `Adds a --dry-run flag that skips writes`. Vague: `code is correct`. The rubric is the picker's tool in Phase D; candidates only see the task.
-3. Pick the runners. Use `arena runners` from `~/.omp/agent/rules/pstack-models.md` when present. Otherwise use four `auto` entries. Spawn more when the arena covers multiple design directions. Repeating one validated selector N times is correct when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use `arena runners` from the active always-applied pstack model rule already present in the OMP system prompt when that role is present. Otherwise use four `auto` entries. Spawn more when the arena covers multiple design directions. Repeating one validated selector N times is correct when the work is generation-bound rather than judgment-sensitive.
 4. Assign output paths. Each candidate writes to its own location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`). N candidates writing to the same path is shared mutable state and fails the `skill://principle-separate-before-serializing-shared-state` test.
 
 ## Phase B: Fan out
@@ -38,7 +38,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, choose one selector from `arena cross-judge pool` in `~/.omp/agent/rules/pstack-models.md`; default to `auto`. Prefer a different model family from the parent's when the configured pool makes that possible. Call `pstack_task` with `strategy: "slice"`, one slice `{ id: "cross-judge", task: <judge brief> }`, and that selector as `model`. The OMP judge sees the rubric and candidates only by path label, scores every criterion, and recommends a base with rationale. Launch it while the parent reads in Phase D, never while candidates are still writing; partial candidate output is not a dropout.
+After all Phase B candidates complete, choose one selector from the `arena cross-judge pool` in the active always-applied pstack model rule already present in the OMP system prompt; default to `auto` when that role is absent. Prefer a different model family from the parent's when the configured pool makes that possible. Call `pstack_task` with `strategy: "slice"`, one slice `{ id: "cross-judge", task: <judge brief> }`, and that selector as `model`. The OMP judge sees the rubric and candidates only by path label, scores every criterion, and recommends a base with rationale. Launch it while the parent reads in Phase D, never while candidates are still writing; partial candidate output is not a dropout.
 
 ## Phase D: Pick a base
 
