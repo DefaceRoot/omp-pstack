@@ -46,7 +46,6 @@ export type RunSubprocessOptions = {
 		description: string;
 		systemPrompt: string;
 		source: "project";
-		spawns: [];
 	};
 	enableLsp?: boolean;
 	outputSchema?: unknown;
@@ -194,7 +193,6 @@ const FALLBACK_AGENT: AgentDefinition = {
 	description: "P-Stack parallel worker",
 	systemPrompt: `Complete the assigned task thoroughly and return the result.\n\n${TERMINAL_YIELD_INSTRUCTION}`,
 	source: "project",
-	spawns: [],
 };
 
 function assignmentAgent(agentPrompt: string | undefined): AgentDefinition {
