@@ -5,17 +5,19 @@ description: Configure which OMP models pstack uses per role. Enumerates availab
 
 # Setup pstack
 
-Write `~/.omp/agent/rules/pstack-models.md`, an always-applied OMP rule that sets the model selector for each pstack role. Skills fall back to `auto` when a line is absent, so the file is an override layer rather than an installation requirement.
+Write `<agent_dir>/rules/pstack-models.md`, an always-applied OMP rule that sets the model selector for each pstack role. Derive `agent_dir` from the active OMP profile as described below; never assume a universal agent directory. Skills fall back to `auto` when a line is absent, so the file is an override layer rather than an installation requirement.
 
 ## Steps
 
-### 1. Detect available models
+### 1. Resolve the active agent directory and detect available models
 
-Run exactly `omp models --json`. Parse the JSON and use only each `models[].selector` value as a real model slug. The command is the source of truth for models available to this OMP installation. If it fails or returns no selectors, show the error and stop; do not guess a slug or ask the user to transcribe data the command can provide. `inherit-parent` and `auto` are pstack aliases, not real slugs, and are always valid.
+Run exactly `omp config path`, trim its output, and store that resolved path as `agent_dir` for the entire setup run. This command resolves the active profile's agent directory: an invocation using `--profile <name>` or the `OMP_PROFILE` environment variable can select a different directory. If the command fails or returns an empty path, show the error and stop; do not fall back to a hardcoded default.
+
+Then run exactly `omp models --json` in the same profile context. Parse the JSON and use only each `models[].selector` value as a real model slug. The command is the source of truth for models available to this OMP installation. If it fails or returns no selectors, show the error and stop; do not guess a slug or ask the user to transcribe data the command can provide. `inherit-parent` and `auto` are pstack aliases, not real slugs, and are always valid.
 
 ### 2. Load current state
 
-If `~/.omp/agent/rules/pstack-models.md` exists, use its role lines as the current choices. Otherwise use the defaults shown in step 5. Ignore comments and frontmatter while parsing. Preserve no unknown role labels: the whole file is generated from the fixed role list below so reruns converge.
+If `<agent_dir>/rules/pstack-models.md` exists, use its role lines as the current choices. Otherwise use the defaults shown in step 5. Always use the `agent_dir` returned by `omp config path` for this load; do not substitute a default-profile path. Ignore comments and frontmatter while parsing. Preserve no unknown role labels: the whole file is generated from the fixed role list below so reruns converge.
 
 ### 3. Map and confirm
 
@@ -25,11 +27,11 @@ Panel roles (`how critics`, `arena runners`, `architect runners`, `interrogate r
 
 ### 4. Validate
 
-Before writing, validate every non-alias value by exact membership in the fresh `omp models --json` selector set. Reject display names, bare model IDs, stale selectors, and partial matches. If any value is invalid, return to step 3. Never write a rule that would make `pstack_task` fail later.
+Before writing, validate that `agent_dir` is the same non-empty path returned by `omp config path`, and bind the target to `<agent_dir>/rules/pstack-models.md`. Validate every non-alias value by exact membership in the fresh `omp models --json` selector set. Reject display names, bare model IDs, stale selectors, and partial matches. If any value is invalid, return to step 3. Never write a rule that would make `pstack_task` fail later.
 
 ### 5. Write the rule
 
-Create `~/.omp/agent/rules/` if needed. Atomically overwrite `~/.omp/agent/rules/pstack-models.md` with the complete normalized content below, substituting only choices validated in step 4. Overwriting the whole generated file makes reruns idempotent.
+Create `<agent_dir>/rules/` if needed. Atomically overwrite `<agent_dir>/rules/pstack-models.md` with the complete normalized content below, substituting only choices validated in step 4. Use the same resolved `agent_dir` for directory creation and replacement. Overwriting the whole generated file makes reruns idempotent.
 
 ```md
 ---
@@ -58,11 +60,11 @@ architect runners: auto, auto, auto, auto
 interrogate reviewers: auto, auto, auto, auto
 ```
 
-Read the file back once and confirm it exactly matches the normalized content. Do not append duplicate sections and do not edit any other OMP rule.
+Read `<agent_dir>/rules/pstack-models.md` back once and confirm it exactly matches the normalized content. Do not append duplicate sections and do not edit any other OMP rule.
 
 ### 6. Confirm
 
-Tell the user the exact path written and that new `pstack_task` calls read it immediately. Re-running this skill updates the same file.
+Tell the user the exact resolved `<agent_dir>/rules/pstack-models.md` path written and that new `pstack_task` calls read it immediately. Re-running this skill under the same active profile updates the same file; changing `--profile` or `OMP_PROFILE` can select another `agent_dir`.
 
 ### 7. Offer a verification skill (optional)
 
