@@ -21,18 +21,47 @@ git fetch origin main --quiet 2>/dev/null || echo "warn: could not fetch origin/
 
 # PR state by branch, fetched once. Without a complete response the audit
 # cannot prove that a merged worktree has no open PR, so fail closed.
+pr_pages=$(mktemp) || {
+	echo "could not create PR-page file" >&2
+	exit 1
+}
 prs=$(mktemp) || {
+	rm -f "$pr_pages"
 	echo "could not create PR-state file" >&2
 	exit 1
 }
-if ! gh pr list --author "@me" --state all --limit 1000 \
-	--json number,state,headRefName > "$prs"; then
-	rm -f "$prs"
+if ! gh api --paginate --slurp \
+	'repos/{owner}/{repo}/pulls?state=open&per_page=100' > "$pr_pages"; then
+	rm -f "$pr_pages" "$prs"
 	echo "could not query GitHub PR state; refusing to classify worktrees" >&2
 	exit 1
 fi
-if ! jq -e 'type == "array"' "$prs" >/dev/null 2>&1; then
-	rm -f "$prs"
+if ! jq -e '
+	if type != "array" then error("invalid paginated PR response")
+	else [
+		.[] | if type == "array" then .[] else . end
+		| {
+			number: (
+				if (.number | type) == "number" then .number
+				else error("invalid PR number")
+				end
+			),
+			state: (
+				if (.state | type) == "string" and (.state | ascii_upcase) == "OPEN"
+				then "OPEN"
+				else error("invalid PR state")
+				end
+			),
+			headRefName: (
+				if (.headRefName? | type) == "string" then .headRefName
+				elif (.head?.ref? | type) == "string" then .head.ref
+				else error("invalid PR head ref")
+				end
+			)
+		}
+	] end
+' "$pr_pages" > "$prs"; then
+	rm -f "$pr_pages" "$prs"
 	echo "could not parse GitHub PR state; refusing to classify worktrees" >&2
 	exit 1
 fi
@@ -41,67 +70,84 @@ fi
 # authoritative; falling back after a command or parse failure could inspect a
 # real default-profile session store while another profile is active.
 if ! agent_dir_output=$(omp config path); then
-	rm -f "$prs"
+	rm -f "$pr_pages" "$prs"
 	echo "could not resolve the active OMP agent directory; refusing to classify worktrees" >&2
 	exit 1
 fi
 case "$agent_dir_output" in
 	*$'\n'*)
-		rm -f "$prs"
+		rm -f "$pr_pages" "$prs"
 		echo "could not parse the active OMP agent directory; refusing to classify worktrees" >&2
 		exit 1
 		;;
 esac
 if ! agent_dir=$(printf '%s\n' "$agent_dir_output" \
 	| sed 's/^[[:space:]]*//;s/[[:space:]]*$//') || [ -z "$agent_dir" ]; then
-	rm -f "$prs"
+	rm -f "$pr_pages" "$prs"
 	echo "could not parse the active OMP agent directory; refusing to classify worktrees" >&2
 	exit 1
 fi
 case "$agent_dir" in
 	/*) ;;
 	*)
-		rm -f "$prs"
+		rm -f "$pr_pages" "$prs"
 		echo "active OMP agent directory is not absolute; refusing to classify worktrees" >&2
 		exit 1
 		;;
 esac
 
 # OMP_PROFILE is canonical even when explicitly set to empty; PI_PROFILE is
-# only the compatibility fallback when OMP_PROFILE is absent.
+# only the compatibility fallback when OMP_PROFILE is absent. Match OMP's
+# normalizeProfileName contract before deriving any profile-scoped path.
 if [ "${OMP_PROFILE+x}" = x ]; then
-	active_profile=$OMP_PROFILE
+	raw_profile=$OMP_PROFILE
 elif [ "${PI_PROFILE+x}" = x ]; then
-	active_profile=$PI_PROFILE
+	raw_profile=$PI_PROFILE
 else
-	active_profile=
+	raw_profile=
 fi
+if ! active_profile=$(printf '%s\n' "$raw_profile" \
+	| sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); then
+	rm -f "$pr_pages" "$prs"
+	echo "could not normalize OMP profile name; refusing to classify worktrees" >&2
+	exit 1
+fi
+[ "$active_profile" = default ] && active_profile=
 if [ -n "$active_profile" ]; then
+	if [[ ! "$active_profile" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
+		rm -f "$pr_pages" "$prs"
+		echo "invalid OMP profile name; refusing to classify worktrees" >&2
+		exit 1
+	fi
 	case "$active_profile" in
-		[![:alnum:]]*|*[![:alnum:]_.-]*)
-			rm -f "$prs"
+		*.|con|con.*|prn|prn.*|aux|aux.*|nul|nul.*|com[0-9]|com[0-9].*|lpt[0-9]|lpt[0-9].*)
+			rm -f "$pr_pages" "$prs"
 			echo "invalid OMP profile name; refusing to classify worktrees" >&2
 			exit 1
 			;;
-		*) ;;
 	esac
 fi
 
-xdg_data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
-case "$xdg_data_home" in
-	/*) ;;
-	*)
-		rm -f "$prs"
-		echo "XDG_DATA_HOME is not absolute; refusing to classify worktrees" >&2
-		exit 1
-		;;
-esac
-
 session_roots=("$agent_dir/sessions")
-if [ -n "$active_profile" ]; then
-	session_roots+=("$xdg_data_home/omp/profiles/$active_profile/sessions")
-else
-	session_roots+=("$xdg_data_home/omp/sessions")
+if [ "${XDG_DATA_HOME+x}" = x ] && [ -n "$XDG_DATA_HOME" ]; then
+	xdg_data_home=$XDG_DATA_HOME
+	case "$xdg_data_home" in
+		/*) ;;
+		*)
+			rm -f "$pr_pages" "$prs"
+			echo "XDG_DATA_HOME is not absolute; refusing to classify worktrees" >&2
+			exit 1
+			;;
+	esac
+
+	if [ -n "$active_profile" ]; then
+		xdg_profile_root="$xdg_data_home/omp/profiles/$active_profile"
+	else
+		xdg_profile_root="$xdg_data_home/omp"
+	fi
+	if [ -d "$xdg_profile_root" ] || [ -e "$xdg_profile_root" ] || [ -L "$xdg_profile_root" ]; then
+		session_roots+=("$xdg_profile_root/sessions")
+	fi
 fi
 
 # Materialize discovery across every applicable root so find failures are not
@@ -109,7 +155,7 @@ fi
 # agent/XDG aliases and follows a command-line sessions-root symlink without
 # following symlinks discovered beneath it.
 session_candidates=$(mktemp) || {
-	rm -f "$prs"
+	rm -f "$pr_pages" "$prs"
 	echo "could not create transcript candidate list" >&2
 	exit 1
 }
@@ -284,12 +330,11 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 		# Every .jsonl candidate must start with a valid session object whose
 		# cwd is a string. Unknown or malformed data cannot prove safety.
 		if ! header_cwd=$(printf '%s\n' "$header" | jq -e -r '
-			if type == "object"
-				and .type == "session"
-				and (.cwd | type == "string")
-			then .cwd
-			else error("invalid session header")
-			end
+			select(.type == "session")
+			| if (.cwd | type) == "string"
+				then .cwd
+				else error("invalid session header")
+				end
 		' 2>/dev/null); then
 			transcript_scan_failed=yes
 			continue
@@ -335,7 +380,7 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 	fi
 
 	case "$dirty" in
-		wip:*|*ignored:*|unknown) bucket=hold-wip ;;
+		wip:*|scratch:*|*ignored:*|unknown) bucket=hold-wip ;;
 		*)
 			case "$pr" in
 				*OPEN*) bucket=hold-open-pr ;;
@@ -352,4 +397,4 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 		"$size_kib" "$size" "$age" "$merged" "$dirty" "$remote" "$pr" "$last" "$bucket" "$wt"
 done | LC_ALL=C sort -t$'\t' -k1,1nr | cut -f2-
 
-rm -f "$prs" "$session_candidates"
+rm -f "$pr_pages" "$prs" "$session_candidates"
