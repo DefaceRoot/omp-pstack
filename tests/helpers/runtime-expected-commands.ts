@@ -1,6 +1,8 @@
 /**
  * Canonical unprefixed slash-command names the runtime extension must register.
- * Direct skills = non-principle P-Stack skills (23 total, including poteto-mode).
+ *
+ * Upstream count: 44 P-Stack skills = 21 principles + 23 non-principle/direct skills.
+ * Register poteto-mode plus the other 22 direct skills (23 directs total).
  */
 export const PSTACK_DIRECT_SKILL_COMMANDS = [
 	"architect",

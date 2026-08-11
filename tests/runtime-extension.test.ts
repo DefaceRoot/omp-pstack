@@ -109,11 +109,12 @@ describe("omp-pstack runtime extension", () => {
 		rmSync(homeDir, { recursive: true, force: true });
 	});
 
-	test("registers poteto-mode, all other P-Stack direct skills, bundled team-kit skills, and session commands unprefixed", () => {
+	test("registers poteto-mode, the other 22 P-Stack direct skills, bundled team-kit skills, and session commands unprefixed", () => {
 		loadExtension(runtime, { packageRoot, homeDir });
 
+		expect(PSTACK_DIRECT_SKILL_COMMANDS).toHaveLength(23);
+		expect(OTHER_PSTACK_DIRECT_SKILL_COMMANDS).toHaveLength(22);
 		expect(runtime.commands.has("poteto-mode")).toBe(true);
-		expect(OTHER_PSTACK_DIRECT_SKILL_COMMANDS.length).toBeGreaterThan(0);
 		for (const name of OTHER_PSTACK_DIRECT_SKILL_COMMANDS) {
 			expect(runtime.commands.has(name)).toBe(true);
 		}
