@@ -11,6 +11,7 @@ import {
 	PSTACK_SESSION_COMMANDS,
 } from "./helpers/runtime-expected-commands.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
+import { isStrictTextOutputSchema } from "./helpers/runtime-output-schema.ts";
 
 // Public seams under test (absent until the green implementation lands).
 import pstackExtension, {
@@ -591,6 +592,70 @@ describe("pstack_task tool seam", () => {
 			expectLogicalResultIds(colliding, ["Main", "Main"], runtimeIds.slice(0, 2));
 			expectLogicalResultIds(panelA, ["panel-0"], runtimeIds.slice(2, 3));
 			expectLogicalResultIds(panelB, ["panel-0"], runtimeIds.slice(3, 4));
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("each native runner call receives a strict text outputSchema so yielded strings stay model-visible with exit 0", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-schema-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-schema-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const yielded = "YIELD: panel consensus ready";
+		const ompOmissionError =
+			'OMP requires outputSchema: { type: "string" } (or equivalently strict non-null text schema) for yielded string results';
+
+		const calls: Array<{ id: string; outputSchema: unknown }> = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			// Injected runSubprocess is the native-runner seam; OMP reads outputSchema here.
+			const outputSchema = (options as { outputSchema?: unknown }).outputSchema;
+			calls.push({ id: options.id, outputSchema });
+
+			// Simulate the OMP failure boundary: omitting a strict text schema rejects
+			// the yielded-string success path (non-zero exit, no model-visible yield).
+			if (!isStrictTextOutputSchema(outputSchema)) {
+				return {
+					id: options.id,
+					exitCode: 1,
+					error: ompOmissionError,
+				};
+			}
+
+			return {
+				id: options.id,
+				exitCode: 0,
+				output: yielded,
+			};
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				"call-output-schema",
+				{
+					strategy: "panel",
+					prompt: "return a short consensus string",
+					models: ["m1", "m2"],
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			expect(calls).toHaveLength(2);
+			for (const call of calls) {
+				expect(isStrictTextOutputSchema(call.outputSchema)).toBe(true);
+			}
+
+			const text = toolResultText(result);
+			expect(text).toContain(yielded);
+			expect(text).toMatch(/exit 0/);
+			expect(text).not.toContain(ompOmissionError);
+			expect(text).not.toMatch(/exit 1/);
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
