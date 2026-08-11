@@ -36,9 +36,13 @@ import { join } from "node:path";
  * Default-profile XDG: when `XDG_DATA_HOME` is explicitly set, the
  * applicable omp data root already exists, and the normalized profile is
  * default (unset / trimmed empty / literal `default`), also consider
- * `$XDG_DATA_HOME/omp/sessions`. Named profiles use only the
- * profile-matched root. Do not invent `$HOME/.local/share` when
- * `XDG_DATA_HOME` is unset.
+ * `$XDG_DATA_HOME/omp/sessions`. That additional XDG session root is
+ * eligible only on linux/darwin AND when active `agent_dir` is the
+ * profile-derived default (`isDefault`). With default profile plus a
+ * custom `PI_CODING_AGENT_DIR`, only `<custom-agent_dir>/sessions` may
+ * be scanned even if `$XDG_DATA_HOME/omp` exists; on Windows OMP ignores
+ * the XDG root. Named profiles use only the profile-matched root. Do
+ * not invent `$HOME/.local/share` when `XDG_DATA_HOME` is unset.
  * User-authored skill discovery/write/evidence uses `<agent_dir>/skills`
  * resolved the same way — never `~/.omp/agent/skills`. Project
  * `.omp/skills` remains valid. Reflect reviewers must not assume any
@@ -138,6 +142,31 @@ const DEFAULT_PROFILE_XDG_GATED =
  */
 const INVENTED_XDG_FALLBACK =
 	/\$HOME\/\.local\/share|~\/\.local\/share|platform XDG data default|XDG data default when (?:the )?(?:variable|XDG_DATA_HOME) is unset|using the platform XDG(?: data)? default when (?:the )?variable is unset/i;
+
+/**
+ * DirResolver: additional XDG session roots are only considered on
+ * linux/darwin (Windows ignores XDG).
+ */
+const XDG_SESSIONS_LINUX_OR_DARWIN =
+	/(?:linux|darwin)[\s\S]{0,160}(?:XDG|xdg)|(?:XDG|xdg)[\s\S]{0,160}(?:linux|darwin)|(?:only|solely|just)\s+on\s+(?:linux(?:\/|,?\s*|\s+and\s+)darwin|darwin(?:\/|,?\s*|\s+and\s+)linux)|supported platforms?[\s\S]{0,80}(?:linux|darwin)/i;
+
+/**
+ * DirResolver `isDefault`: XDG adoption requires active agent_dir to be the
+ * profile-derived default agent directory — not a custom override.
+ */
+const XDG_REQUIRES_PROFILE_DERIVED_DEFAULT_AGENT_DIR =
+	/(?:isDefault|profile-derived\s+default|agent_dir[\s\S]{0,80}(?:equals|is\s+the|matches)[\s\S]{0,80}(?:profile-derived|default\s+agent)|(?:only|solely)\s+when[\s\S]{0,120}(?:profile-derived\s+default|isDefault|agent_dir[\s\S]{0,60}default))/i;
+
+/**
+ * Custom `PI_CODING_AGENT_DIR` on the default profile disables the additional
+ * XDG session root — scan only `<custom-agent_dir>/sessions`.
+ */
+const CUSTOM_PI_CODING_AGENT_DIR_SKIPS_XDG =
+	/(?:PI_CODING_AGENT_DIR|custom\s+agent_dir|agentDirOverride)[\s\S]{0,220}(?:(?:only|solely)\s+(?:search|scan|use)|no\s+XDG|without\s+XDG|skip(?:s|ping)?\s+XDG|not[\s\S]{0,40}XDG)|(?:(?:only|solely)\s+(?:search|scan|use)|no\s+XDG|without\s+XDG|skip(?:s|ping)?\s+XDG)[\s\S]{0,220}(?:PI_CODING_AGENT_DIR|custom\s+agent_dir)/i;
+
+/** Windows must ignore the additional XDG sessions root. */
+const WINDOWS_IGNORES_XDG_SESSIONS =
+	/(?:windows|win32)[\s\S]{0,120}(?:ignore[sd]?|does\s+not|don't|do\s+not|never)[\s\S]{0,80}XDG|(?:ignore[sd]?|does\s+not|don't|do\s+not|never)[\s\S]{0,80}XDG[\s\S]{0,120}(?:windows|win32)/i;
 
 /** Prefer an explicit current session / history / agent handoff path. */
 const PREFER_EXPLICIT_SESSION_OR_HISTORY =
@@ -322,6 +351,71 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 			if (INVENTED_XDG_FALLBACK.test(body)) {
 				violations.push(
 					`${relativePath}: must not invent \`$HOME/.local/share\` / platform XDG defaults when XDG_DATA_HOME is unset`,
+				);
+			}
+		}
+
+		expect(violations).toEqual([]);
+	});
+
+	test("every transcript consumer gates additional XDG sessions to linux/darwin + profile-derived default agent_dir (isDefault), skips XDG under custom PI_CODING_AGENT_DIR, and ignores XDG on Windows", () => {
+		const violations: string[] = [];
+
+		for (const relativePath of TRANSCRIPT_CONSUMERS) {
+			const body = readConsumer(relativePath);
+
+			// Preserve prior normalized-profile / agent_dir / no-leakage contracts.
+			if (!AGENT_DIR_VIA_OMP_CONFIG_PATH.test(body)) {
+				violations.push(
+					`${relativePath}: must still resolve active agent_dir via \`omp config path\``,
+				);
+			}
+
+			if (!AGENT_DIR_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: must still search <agent_dir>/sessions`,
+				);
+			}
+
+			if (!PROFILE_MATCHED_XDG_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: named profiles must still use profile-matched \`$XDG_DATA_HOME/omp/profiles/<profile>/sessions\``,
+				);
+			}
+
+			if (!NO_DEFAULT_PROFILE_SESSION_LEAK.test(body)) {
+				violations.push(
+					`${relativePath}: named-profile discovery must still never read default-profile sessions`,
+				);
+			}
+
+			if (!DEFAULT_PROFILE_XDG_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: must still mention \`$XDG_DATA_HOME/omp/sessions\` for eligible default-profile cases`,
+				);
+			}
+
+			if (!XDG_SESSIONS_LINUX_OR_DARWIN.test(body)) {
+				violations.push(
+					`${relativePath}: additional XDG session root is eligible only on linux/darwin`,
+				);
+			}
+
+			if (!XDG_REQUIRES_PROFILE_DERIVED_DEFAULT_AGENT_DIR.test(body)) {
+				violations.push(
+					`${relativePath}: additional XDG session root requires active agent_dir to be the profile-derived default (isDefault)`,
+				);
+			}
+
+			if (!CUSTOM_PI_CODING_AGENT_DIR_SKIPS_XDG.test(body)) {
+				violations.push(
+					`${relativePath}: with default profile plus custom PI_CODING_AGENT_DIR, only <custom-agent_dir>/sessions may be scanned even if $XDG_DATA_HOME/omp exists`,
+				);
+			}
+
+			if (!WINDOWS_IGNORES_XDG_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: on Windows OMP ignores the additional XDG sessions root`,
 				);
 			}
 		}
