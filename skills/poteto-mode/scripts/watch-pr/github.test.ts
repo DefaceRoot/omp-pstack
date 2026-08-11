@@ -307,6 +307,74 @@ describe("context and stack discovery", () => {
     ]);
     expect(ordered.map((item) => Number(item.number))).toEqual([41, 42, 43]);
   });
+
+  it(
+    "throws WatcherQueryError on a two-PR downstack cycle instead of looping",
+    async () => {
+      const githubHref = new URL("./github.ts", import.meta.url).href;
+      const typesHref = new URL("./types.ts", import.meta.url).href;
+      const source = `
+import { orderStack, WatcherQueryError } from ${JSON.stringify(githubHref)};
+import { parsePrNumber } from ${JSON.stringify(typesHref)};
+const context = { owner: "owner", repo: "repo", number: parsePrNumber(42) };
+try {
+  const ordered = orderStack(context, [
+    {
+      number: context.number,
+      headRefName: "feature-a",
+      baseRefName: "feature-b",
+    },
+    {
+      number: parsePrNumber(43),
+      headRefName: "feature-b",
+      baseRefName: "feature-a",
+    },
+  ]);
+  postMessage({
+    status: "returned",
+    numbers: ordered.map((item) => Number(item.number)),
+  });
+} catch (error) {
+  postMessage({
+    status: "threw",
+    name: error instanceof Error ? error.name : null,
+    isWatcherQueryError: error instanceof WatcherQueryError,
+  });
+}
+`;
+      const worker = new Worker(
+        URL.createObjectURL(new Blob([source], { type: "text/javascript" }))
+      );
+      try {
+        const outcome = await Promise.race([
+          new Promise<{
+            readonly kind: "message";
+            readonly data: unknown;
+          }>((resolve) => {
+            worker.onmessage = (event: MessageEvent) =>
+              resolve({ kind: "message", data: event.data });
+            worker.onerror = (event: ErrorEvent) =>
+              resolve({
+                kind: "message",
+                data: { status: "error", name: event.message },
+              });
+          }),
+          Bun.sleep(250).then(() => ({ kind: "timeout" as const })),
+        ]);
+        expect(outcome).toEqual({
+          kind: "message",
+          data: {
+            status: "threw",
+            name: "WatcherQueryError",
+            isWatcherQueryError: true,
+          },
+        });
+      } finally {
+        worker.terminate();
+      }
+    },
+    { timeout: 2000 }
+  );
 });
 
 const ghFixtureDirs: string[] = [];
