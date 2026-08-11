@@ -9,6 +9,11 @@ export type CustomSessionEntry = {
 	data?: unknown;
 };
 
+export type FakeModel = {
+	provider: string;
+	id: string;
+};
+
 export type RegisteredCommand = {
 	name: string;
 	description?: string;
@@ -45,6 +50,16 @@ export type FakeCommandContext = {
 		getEntries: () => CustomSessionEntry[];
 	};
 	hasPendingMessages: () => boolean;
+	/** Active session model, mirroring OMP ExtensionContext.model. */
+	model?: FakeModel;
+	/** Read-only model query facade, mirroring OMP ExtensionContext.models. */
+	models: {
+		list: () => FakeModel[];
+		current: () => FakeModel | undefined;
+		resolve: (spec: string) => FakeModel | undefined;
+		family: (model: FakeModel) => string;
+	};
+	modelRegistry?: unknown;
 };
 
 export type FakeExtensionAPI = {
@@ -68,6 +83,8 @@ export type FakeRuntimeOptions = {
 	cwd?: string;
 	confirmResult?: boolean;
 	initialEntries?: CustomSessionEntry[];
+	/** Active parent session model exposed on tool/command context. */
+	parentModel?: FakeModel;
 };
 
 export type FakeRuntime = {
@@ -80,9 +97,14 @@ export type FakeRuntime = {
 	confirmCalls: Array<{ title: string; message: string }>;
 	handlers: Map<string, Array<(...args: unknown[]) => unknown>>;
 	setConfirmResult: (value: boolean) => void;
+	setParentModel: (model: FakeModel | undefined) => void;
+	replaceEntries: (next: CustomSessionEntry[]) => void;
 	createContext: () => FakeCommandContext;
 	invokeCommand: (name: string, args?: string) => Promise<void>;
 	emitSessionStart: () => Promise<void>;
+	emitSessionSwitch: (reason?: "new" | "resume" | "fork") => Promise<void>;
+	emitSessionBranch: () => Promise<void>;
+	emitSessionTree: () => Promise<void>;
 	emitBeforeAgentStart: (
 		systemPrompt: string[],
 		prompt?: string,
@@ -98,6 +120,7 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	const confirmCalls: Array<{ title: string; message: string }> = [];
 	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 	let confirmResult = options.confirmResult ?? true;
+	let parentModel = options.parentModel;
 	const cwd = options.cwd ?? process.cwd();
 
 	const createContext = (): FakeCommandContext => ({
@@ -116,6 +139,18 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			getEntries: () => [...entries],
 		},
 		hasPendingMessages: () => false,
+		model: parentModel,
+		models: {
+			list: () => (parentModel ? [parentModel] : []),
+			current: () => parentModel,
+			resolve: (spec) => {
+				if (!parentModel) return undefined;
+				const selector = `${parentModel.provider}/${parentModel.id}`;
+				return spec === selector || spec === parentModel.id ? parentModel : undefined;
+			},
+			family: (model) => model.provider.toLowerCase(),
+		},
+		modelRegistry: {},
 	});
 
 	const api: FakeExtensionAPI = {
@@ -147,6 +182,14 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		},
 	};
 
+	async function emitLifecycle(event: string, payload: Record<string, unknown>): Promise<void> {
+		const list = handlers.get(event) ?? [];
+		const ctx = createContext();
+		for (const handler of list) {
+			await handler(payload, ctx);
+		}
+	}
+
 	return {
 		api,
 		commands,
@@ -159,6 +202,12 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		setConfirmResult(value) {
 			confirmResult = value;
 		},
+		setParentModel(model) {
+			parentModel = model;
+		},
+		replaceEntries(next) {
+			entries.splice(0, entries.length, ...next);
+		},
 		createContext,
 		async invokeCommand(name, args = "") {
 			const command = commands.get(name);
@@ -168,11 +217,27 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			await command.handler(args, createContext());
 		},
 		async emitSessionStart() {
-			const list = handlers.get("session_start") ?? [];
-			const ctx = createContext();
-			for (const handler of list) {
-				await handler({ type: "session_start" }, ctx);
-			}
+			await emitLifecycle("session_start", { type: "session_start" });
+		},
+		async emitSessionSwitch(reason = "resume") {
+			await emitLifecycle("session_switch", {
+				type: "session_switch",
+				reason,
+				previousSessionFile: "/tmp/previous-session.jsonl",
+			});
+		},
+		async emitSessionBranch() {
+			await emitLifecycle("session_branch", {
+				type: "session_branch",
+				previousSessionFile: "/tmp/previous-session.jsonl",
+			});
+		},
+		async emitSessionTree() {
+			await emitLifecycle("session_tree", {
+				type: "session_tree",
+				newLeafId: "leaf-b",
+				oldLeafId: "leaf-a",
+			});
 		},
 		async emitBeforeAgentStart(systemPrompt, prompt = "") {
 			const list = handlers.get("before_agent_start") ?? [];

@@ -21,7 +21,6 @@ import {
 	executeAssignments,
 	expandAssignments,
 	resolveModelOverride,
-	type Assignment,
 	type RunSubprocessFn,
 } from "../src/pstack-task.ts";
 
@@ -199,6 +198,42 @@ describe("omp-pstack runtime extension", () => {
 		expect(onResult!.systemPrompt!.length).toBeGreaterThan(1);
 	});
 
+	test("session_switch, session_branch, and session_tree reconstruct sticky mode without leakage", async () => {
+		loadExtension(runtime, { packageRoot, homeDir });
+		await runtime.invokeCommand("poteto-mode", "armed");
+
+		// Switch into a session whose latest sticky entry is OFF.
+		runtime.replaceEntries([
+			{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "OFF" } },
+		]);
+		await runtime.emitSessionSwitch("resume");
+		const switchedOff = await runtime.emitBeforeAgentStart(["base-system"]);
+		expect(switchedOff?.systemPrompt ?? ["base-system"]).toEqual(["base-system"]);
+		await runtime.invokeCommand("pstack-status");
+		expect(runtime.notifications.at(-1)?.message).toContain("OFF");
+
+		// Branch into a session whose latest sticky entry is ON.
+		runtime.replaceEntries([
+			{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "ON" } },
+		]);
+		await runtime.emitSessionBranch();
+		const branchedOn = await runtime.emitBeforeAgentStart(["base-system"]);
+		expect(branchedOn?.systemPrompt).toBeDefined();
+		expect(branchedOn!.systemPrompt!.at(-1)).toContain(POTETO_REMINDER);
+		await runtime.invokeCommand("pstack-status");
+		expect(runtime.notifications.at(-1)?.message).toContain("ON");
+
+		// Tree navigation into an OFF leaf must clear sticky reminder leakage.
+		runtime.replaceEntries([
+			{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "OFF" } },
+		]);
+		await runtime.emitSessionTree();
+		const treeOff = await runtime.emitBeforeAgentStart(["base-system"]);
+		expect(treeOff?.systemPrompt ?? ["base-system"]).toEqual(["base-system"]);
+		await runtime.invokeCommand("pstack-status");
+		expect(runtime.notifications.at(-1)?.message).toContain("OFF");
+	});
+
 	test("active mode appends a short reminder without replacing prior system-prompt segments", async () => {
 		loadExtension(runtime, { packageRoot, homeDir });
 		await runtime.invokeCommand("poteto-mode", "keep going");
@@ -242,18 +277,21 @@ describe("omp-pstack runtime extension", () => {
 });
 
 describe("pstack_task pure helpers", () => {
-	test("expands panel versus slice strategies and maps auto/inherit-parent to parent inheritance", () => {
+	test("expands panel versus slice strategies and refuses auto/inherit-parent as literal model slugs", () => {
 		const panel = expandAssignments({
 			strategy: "panel",
 			prompt: "critique the diff",
 			models: ["claude-a", "auto", "inherit-parent", "grok-b"],
 		});
-		expect(panel).toEqual([
-			{ id: "panel-0", task: "critique the diff", modelOverride: "claude-a" },
-			{ id: "panel-1", task: "critique the diff", modelOverride: undefined },
-			{ id: "panel-2", task: "critique the diff", modelOverride: undefined },
-			{ id: "panel-3", task: "critique the diff", modelOverride: "grok-b" },
-		] satisfies Assignment[]);
+		expect(panel.map((item) => item.id)).toEqual(["panel-0", "panel-1", "panel-2", "panel-3"]);
+		expect(panel[0]?.modelOverride).toBe("claude-a");
+		expect(panel[3]?.modelOverride).toBe("grok-b");
+		// Sentinels must never reach the runner as the strings "auto" / "inherit-parent".
+		expect(panel[1]?.modelOverride).not.toBe("auto");
+		expect(panel[2]?.modelOverride).not.toBe("inherit-parent");
+		expect(resolveModelOverride("auto")).not.toBe("auto");
+		expect(resolveModelOverride("inherit-parent")).not.toBe("inherit-parent");
+		expect(resolveModelOverride("gpt-test")).toBe("gpt-test");
 
 		const slices = expandAssignments({
 			strategy: "slice",
@@ -263,14 +301,8 @@ describe("pstack_task pure helpers", () => {
 			],
 			model: "inherit-parent",
 		});
-		expect(slices).toEqual([
-			{ id: "auth", task: "cover auth", modelOverride: undefined },
-			{ id: "billing", task: "cover billing", modelOverride: undefined },
-		]);
-
-		expect(resolveModelOverride("auto")).toBeUndefined();
-		expect(resolveModelOverride("inherit-parent")).toBeUndefined();
-		expect(resolveModelOverride("gpt-test")).toBe("gpt-test");
+		expect(slices.map((item) => item.id)).toEqual(["auth", "billing"]);
+		expect(slices.every((item) => item.modelOverride !== "inherit-parent")).toBe(true);
 	});
 
 	test("executes expanded assignments concurrently through injected runSubprocess", async () => {
@@ -309,6 +341,16 @@ describe("pstack_task pure helpers", () => {
 });
 
 describe("pstack_task tool seam", () => {
+	function toolResultText(result: unknown): string {
+		return messageText(result);
+	}
+
+	function resultDetails(result: unknown): Record<string, unknown> {
+		if (!result || typeof result !== "object") return {};
+		const details = (result as { details?: unknown }).details;
+		return details && typeof details === "object" ? (details as Record<string, unknown>) : {};
+	}
+
 	test("registers pstack_task and routes execution through injected runSubprocess without live model calls", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-home-"));
@@ -322,7 +364,7 @@ describe("pstack_task tool seam", () => {
 				task: options.task,
 				modelOverride: options.modelOverride,
 			});
-			return { exitCode: 0, id: options.id, error: undefined };
+			return { exitCode: 0, id: options.id, error: undefined, output: `ok-${options.id}` };
 		};
 
 		try {
@@ -338,7 +380,7 @@ describe("pstack_task tool seam", () => {
 						{ id: "a", task: "slice-a" },
 						{ id: "b", task: "slice-b" },
 					],
-					model: "auto",
+					model: "m1",
 				},
 				undefined,
 				undefined,
@@ -346,9 +388,210 @@ describe("pstack_task tool seam", () => {
 			);
 
 			expect(calls).toHaveLength(2);
-			expect(calls.every((call) => call.modelOverride === undefined)).toBe(true);
-			expect(calls.map((call) => call.id).sort()).toEqual(["a", "b"]);
+			expect(calls.every((call) => call.task === "slice-a" || call.task === "slice-b")).toBe(true);
 			expect(result).toBeDefined();
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("pstack_task content includes successful assignment output", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-out-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-out-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const runSubprocess: RunSubprocessFn = async (options) => ({
+			exitCode: 0,
+			id: options.id,
+			output: "SHIP: auth looks solid",
+		});
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				"call-output",
+				{ strategy: "panel", prompt: "review auth", models: ["m1"] },
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+			expect(toolResultText(result)).toContain("SHIP: auth looks solid");
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("auto and inherit-parent forward the execution context active parent model", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-model-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-model-home-"));
+		writePackageFixture(packageRoot);
+		const parentModel = { provider: "openai", id: "gpt-parent-live" };
+		const runtime = createFakeRuntime({ cwd: packageRoot, parentModel });
+
+		const calls: Array<Record<string, unknown>> = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			calls.push({ id: options.id, modelOverride: options.modelOverride });
+			return { exitCode: 0, id: options.id, output: "ok" };
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			await tool.execute(
+				"call-inherit",
+				{
+					strategy: "panel",
+					prompt: "inherit me",
+					models: ["auto", "inherit-parent"],
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+			expect(calls).toHaveLength(2);
+			expect(calls.every((call) => call.modelOverride === "openai/gpt-parent-live")).toBe(true);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("absent bundled agent definition does not reach the native runner as undefined", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-agent-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-agent-home-"));
+		writePackageFixture(packageRoot);
+		// Intentionally omit agents/poteto-agent.md from the fixture package.
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const calls: Array<Record<string, unknown>> = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			calls.push({
+				id: options.id,
+				hasAgentKey: Object.hasOwn(options, "agent"),
+				agent: options.agent,
+			});
+			return { exitCode: 0, id: options.id, output: "ok" };
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				"call-agent",
+				{ strategy: "panel", prompt: "need agent", models: ["m1"] },
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			if (calls.length === 0) {
+				// Fail closed before launch is acceptable.
+				expect(toolResultText(result).toLowerCase()).toMatch(/agent|missing|unavailable|required/);
+			} else {
+				for (const call of calls) {
+					expect(call.agent).toBeDefined();
+					expect(call.agent).not.toBeNull();
+					const agent = call.agent as { systemPrompt?: unknown };
+					expect(typeof agent.systemPrompt).toBe("string");
+					expect(String(agent.systemPrompt).length).toBeGreaterThan(0);
+				}
+			}
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("repeated and concurrent logical ids get unique runtime ids while preserving logical ids in outputs", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-ids-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-ids-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const calls: Array<Record<string, unknown>> = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			calls.push({ id: options.id, task: options.task });
+			await Bun.sleep(15);
+			return { exitCode: 0, id: options.id, output: `done:${options.task}` };
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+
+			const colliding = await tool.execute(
+				"call-collide",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: "Main", task: "first-main" },
+						{ id: "Main", task: "second-main" },
+					],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			const [panelA, panelB] = await Promise.all([
+				tool.execute(
+					"call-panel-a",
+					{ strategy: "panel", prompt: "panel-a", models: ["m1"] },
+					undefined,
+					undefined,
+					runtime.createContext(),
+				),
+				tool.execute(
+					"call-panel-b",
+					{ strategy: "panel", prompt: "panel-b", models: ["m2"] },
+					undefined,
+					undefined,
+					runtime.createContext(),
+				),
+			]);
+
+			const runtimeIds = calls.map((call) => String(call.id));
+			expect(runtimeIds).toHaveLength(4);
+			expect(new Set(runtimeIds).size).toBe(4);
+			// User-colliding / reserved logical ids must not be used verbatim as native runtime ids.
+			expect(runtimeIds.includes("Main")).toBe(false);
+			expect(runtimeIds.filter((id) => id === "panel-0")).toHaveLength(0);
+
+			const collidingText = toolResultText(colliding);
+			expect(collidingText).toContain("Main");
+			const collidingDetails = resultDetails(colliding);
+			const collidingResults = Array.isArray(collidingDetails.results)
+				? (collidingDetails.results as Array<{ id?: string }>)
+				: [];
+			const collidingAssignments = Array.isArray(collidingDetails.assignments)
+				? (collidingDetails.assignments as Array<{ id?: string }>)
+				: [];
+			const logicalIds = [
+				...collidingResults.map((item) => item.id),
+				...collidingAssignments.map((item) => item.id),
+			].filter(Boolean);
+			expect(logicalIds.filter((id) => id === "Main").length).toBeGreaterThanOrEqual(2);
+
+			const panelLogical = [
+				...((Array.isArray(resultDetails(panelA).assignments)
+					? resultDetails(panelA).assignments
+					: []) as Array<{ id?: string }>),
+				...((Array.isArray(resultDetails(panelB).assignments)
+					? resultDetails(panelB).assignments
+					: []) as Array<{ id?: string }>),
+				...((Array.isArray(resultDetails(panelA).results)
+					? resultDetails(panelA).results
+					: []) as Array<{ id?: string }>),
+				...((Array.isArray(resultDetails(panelB).results)
+					? resultDetails(panelB).results
+					: []) as Array<{ id?: string }>),
+			].map((item) => item.id);
+			expect(panelLogical.filter((id) => id === "panel-0")).toHaveLength(2);
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
