@@ -11,8 +11,8 @@ import {
 	PSTACK_SESSION_COMMANDS,
 } from "./helpers/runtime-expected-commands.ts";
 import {
-	hasNonRecursiveBuiltInToolWhitelist,
 	preservesChildMcpWithoutExtensionReload,
+	preservesStandardNativeToolsWithoutRecursion,
 	requiresTerminalYieldWithTextData,
 } from "./helpers/runtime-agent-capabilities.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
@@ -974,7 +974,7 @@ describe("pstack_task tool seam", () => {
 		}
 	});
 
-	test("every AgentDefinition passed to raw runSubprocess has a non-recursive built-in tool whitelist and empty spawns", async () => {
+	test("every AgentDefinition passed to raw runSubprocess omits tools (or keeps full native surface) with empty spawns and no extension reload", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-caps-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-caps-home-"));
 		writePackageFixture(packageRoot);
@@ -1019,15 +1019,28 @@ describe("pstack_task tool seam", () => {
 					spawns?: unknown;
 					systemPrompt?: unknown;
 				} | undefined;
-				expect(hasNonRecursiveBuiltInToolWhitelist(agent)).toBe(true);
+				// Prefer omitting agent.tools so standard OMP built-ins (todo, web_search,
+				// browser, ask, inspect_image, …) remain available. A six-tool whitelist
+				// silently drops that surface. Explicit lists must still include todo +
+				// web_search and exclude recursive launchers, with spawns:[].
+				expect(preservesStandardNativeToolsWithoutRecursion(agent)).toBe(true);
 				expect(requiresTerminalYieldWithTextData(agent?.systemPrompt)).toBe(true);
 				expect(preservesChildMcpWithoutExtensionReload(entry)).toBe(true);
 				expect(isStrictTextOutputSchema(entry.outputSchema)).toBe(true);
 				expect(isStrictOutputSchemaMode(entry.outputSchemaMode)).toBe(true);
+				// Recursion safety: pstack_task is not reloaded; native delegation cannot spawn.
+				expect(Array.isArray(agent?.spawns) && agent.spawns.length === 0).toBe(true);
 				const tools = Array.isArray(agent?.tools) ? agent.tools : [];
-				expect(tools.includes("yield")).toBe(false);
 				expect(tools.includes("task")).toBe(false);
 				expect(tools.includes("pstack_task")).toBe(false);
+				if (agent?.tools !== undefined) {
+					expect(tools.includes("todo")).toBe(true);
+					expect(tools.includes("web_search")).toBe(true);
+					expect(tools.includes("yield")).toBe(false);
+				} else {
+					// Omission is the preferred contract: no whitelist to assert against.
+					expect(Object.hasOwn(agent ?? {}, "tools")).toBe(false);
+				}
 			}
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });

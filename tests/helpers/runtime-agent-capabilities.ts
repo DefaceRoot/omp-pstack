@@ -5,14 +5,19 @@
  * - ExecutorOptions: `@oh-my-pi/pi-coding-agent@17.2.13` `src/task/executor.ts`
  *   (`outputSchema?`, `outputSchemaMode?`, `enableMCP?`, `preloadedExtensionPaths?`,
  *   `preloadedCustomToolPaths?`, `restrictToolNames?`)
+ * - AgentDefinition: `src/task/types.ts` (`tools?: string[]`, `spawns?: string[] | "*"`)
+ * - When `agent.tools` is omitted (or empty), executor leaves toolNames unset so the
+ *   standard OMP built-in surface remains available (todo, web_search, browser, ask,
+ *   inspect_image, …). A nonempty six-tool whitelist silently drops those.
  * - `restrictToolNames: true` disables MCP (`enableMCP = !restrictToolNames && …`) and
  *   clears preloaded extension/custom-tool paths. Why/Reflect need child MCP, so
  *   pstack_task must keep `enableMCP: true`, pass empty preload arrays to block
  *   recursive extension reload, and leave `restrictToolNames` omitted/not-true.
  * - Yield contract: `src/tools/yield.ts` — success needs non-null `result.data`.
  *
- * AgentDefinition must still carry a nonempty built-in tool whitelist excluding
- * recursive launchers (`task`, `pstack_task`) and empty `spawns`.
+ * Prefer omitting `agent.tools`. Only if an explicit list is required, it must at
+ * minimum include `todo` and `web_search`, exclude recursive launchers (`task`,
+ * `pstack_task`), and keep `spawns: []` so native delegation cannot spawn.
  */
 export type AgentCapabilitySnapshot = {
 	tools?: unknown;
@@ -27,11 +32,25 @@ export type ChildRunnerPolicySnapshot = {
 	preloadedCustomToolPaths?: unknown;
 };
 
-export function hasNonRecursiveBuiltInToolWhitelist(agent: AgentCapabilitySnapshot | null | undefined): boolean {
-	if (!agent || !Array.isArray(agent.tools) || agent.tools.length === 0) return false;
+/**
+ * Prefer omitted `agent.tools` (standard OMP built-ins remain available). An
+ * explicit list is accepted only when it includes at least `todo` + `web_search`
+ * and excludes recursive launchers. Always require empty `spawns`.
+ */
+export function preservesStandardNativeToolsWithoutRecursion(
+	agent: AgentCapabilitySnapshot | null | undefined,
+): boolean {
+	if (!agent) return false;
+	if (!Array.isArray(agent.spawns) || agent.spawns.length !== 0) return false;
+
+	// Preferred: omit tools so OMP keeps the full standard built-in surface.
+	if (agent.tools === undefined) return true;
+
+	// Explicit-list fallback only (public API does not require a whitelist).
+	if (!Array.isArray(agent.tools) || agent.tools.length === 0) return false;
 	if (!agent.tools.every((tool) => typeof tool === "string" && tool.trim() !== "")) return false;
 	if (agent.tools.includes("task") || agent.tools.includes("pstack_task")) return false;
-	if (!Array.isArray(agent.spawns) || agent.spawns.length !== 0) return false;
+	if (!agent.tools.includes("todo") || !agent.tools.includes("web_search")) return false;
 	return true;
 }
 
