@@ -9,7 +9,7 @@ import { join } from "node:path";
  * - root licensing notices for Lauren Tan and Cursor
  *
  * Independent source of truth: orchestrator assignment + Main install/metadata pins +
- * PackageDocsReview follow-up findings.
+ * PackageDocsReview / PackageTestReview follow-up findings.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -132,6 +132,46 @@ function uninstallSentences(text: string): string[] {
 		);
 }
 
+/** Determiners/adjectives allowed between a verb and its object. */
+const VERB_OBJECT_DETERMINERS =
+	"(?:(?:the|your|a|an|only|user-owned|local|omp'?s|managed|installed|plugin)\\s+)*";
+
+/**
+ * Polarity-bound verb→object matcher.
+ * `never deletes X` is negative; bare `deletes X` is affirmative.
+ * Rejects vacuities where `\bdeletes\b` matches inside `never deletes`.
+ */
+function hasPolarVerbObject(
+	sentence: string,
+	verbs: string,
+	objectPattern: string,
+	polarity: "affirmative" | "negative",
+): boolean {
+	const re = new RegExp(
+		String.raw`\b(?:(never|does not|doesn't)\s+)?(${verbs})\s+${VERB_OBJECT_DETERMINERS}(?:${objectPattern})\b`,
+		"gi",
+	);
+	for (const match of sentence.matchAll(re)) {
+		const isNegative = Boolean(match[1]);
+		if (polarity === "affirmative" && !isNegative) return true;
+		if (polarity === "negative" && isNegative) return true;
+	}
+	return false;
+}
+
+/** Reject empty or placeholder-only task/input (e.g. `<task>`, `TODO`). */
+function isConcreteTaskInput(task: string): boolean {
+	const trimmed = task.trim();
+	if (trimmed.length === 0) return false;
+	if (/^<[^<>]+>$/.test(trimmed)) return false;
+	if (/^\{[^{}]+\}$/.test(trimmed)) return false;
+	if (/^\[[^\[\]]+\]$/.test(trimmed)) return false;
+	if (/^(TODO|FIXME|TBD|WIP)$/i.test(trimmed)) return false;
+	if (/^(\.{3}|…)$/.test(trimmed)) return false;
+	if (/^task$/i.test(trimmed)) return false;
+	return true;
+}
+
 function collectLicenseTexts(): Array<{ path: string; text: string }> {
 	const out: Array<{ path: string; text: string }> = [];
 	const rootLicense = join(ROOT, "LICENSE");
@@ -213,14 +253,15 @@ test("README fences a runnable P-Stack trial and team-kit slash examples with no
 	}
 
 	// Each team-kit slash example must be a fenced line with a concrete nonempty task/input.
+	// Placeholder-only inputs like `<task>` or `TODO` do not count.
 	for (const command of TEAM_KIT_COMMANDS) {
 		const runnable = lines.find((line) => {
 			if (!line.startsWith(`${command} `) && line !== command) return false;
 			const task = line.slice(command.length).trim();
-			return task.length > 0;
+			return isConcreteTaskInput(task);
 		});
 		expect(runnable).toBeDefined();
-		expect(runnable!.slice(command.length).trim().length).toBeGreaterThan(0);
+		expect(isConcreteTaskInput(runnable!.slice(command.length))).toBe(true);
 	}
 });
 
@@ -255,31 +296,49 @@ test("README pins remote managed-copy removal and local-checkout non-deletion in
 	expect(bounded.length).toBeGreaterThan(0);
 
 	// Affirmative remote managed-copy removal must live in its own uninstall sentence.
+	// `never deletes ... managed copy` must not satisfy this (polarity-bound).
 	const remoteManagedRemoval = bounded.find(
 		(sentence) =>
 			/(GitHub remote|remote install|managed)/i.test(sentence) &&
-			/\b(removes|deletes)\b/i.test(sentence) &&
-			/(managed (installed )?copy|installed copy)/i.test(sentence),
+			hasPolarVerbObject(
+				sentence,
+				"removes|deletes",
+				"managed (?:installed )?copy|installed copy",
+				"affirmative",
+			),
 	);
 	expect(remoteManagedRemoval).toBeDefined();
 
-	// Explicit negative local-checkout deletion must live in its own uninstall sentence.
+	// Explicit negative local-checkout deletion must bind the negation to checkout/working tree.
+	// `does not remove metadata but deletes the checkout` must not satisfy this.
 	const localCheckoutPreserved = bounded.find(
 		(sentence) =>
 			/(local(-|\s)?link|local checkout)/i.test(sentence) &&
-			/(never deletes|does not delete|does not remove|never removes)/i.test(
+			hasPolarVerbObject(
 				sentence,
+				"removes|deletes",
+				"checkout|working tree",
+				"negative",
 			) &&
-			/(checkout|working tree)/i.test(sentence),
+			!hasPolarVerbObject(
+				sentence,
+				"removes|deletes",
+				"checkout|working tree",
+				"affirmative",
+			),
 	);
 	expect(localCheckoutPreserved).toBeDefined();
 
-	// Local-link uninstall also removes only registration/link within a bounded uninstall sentence.
+	// Local-link uninstall affirmatively removes registration/link (not `never removes`).
 	const localLinkRegistration = bounded.find(
 		(sentence) =>
 			/(local(-|\s)?link|local checkout)/i.test(sentence) &&
-			/\b(removes|remove)\b/i.test(sentence) &&
-			/(registration|link)/i.test(sentence),
+			hasPolarVerbObject(
+				sentence,
+				"removes?",
+				"registration(?:\/link)?|link",
+				"affirmative",
+			),
 	);
 	expect(localLinkRegistration).toBeDefined();
 });
