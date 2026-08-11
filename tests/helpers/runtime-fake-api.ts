@@ -81,10 +81,11 @@ export type FakeExtensionAPI = {
 	sendUserMessage: (content: unknown, options?: unknown) => void;
 	setLabel: (label: string) => void;
 	zod: { object: (...args: unknown[]) => unknown; string: () => unknown; array: (...args: unknown[]) => unknown };
-	/** Host runtime surface read by the extension (`pi.pi.settings`). */
+	/** Host runtime surface read by the extension (`pi.pi.settings` / `getAgentDir`). */
 	pi?: {
 		settings?: FakeSettingsLike;
 		runSubprocess?: unknown;
+		getAgentDir?: () => string;
 	};
 };
 
@@ -96,6 +97,8 @@ export type FakeRuntimeOptions = {
 	parentModel?: FakeModel;
 	/** Live settings bag exposed at `api.pi.settings`. */
 	settings?: FakeSettingsLike;
+	/** Active profile agent dir exposed at `api.pi.getAgentDir()`. */
+	getAgentDir?: () => string;
 };
 
 export type FakeRuntime = {
@@ -110,6 +113,7 @@ export type FakeRuntime = {
 	setConfirmResult: (value: boolean) => void;
 	setParentModel: (model: FakeModel | undefined) => void;
 	setSettings: (settings: FakeSettingsLike | undefined) => void;
+	setGetAgentDir: (getAgentDir: (() => string) | undefined) => void;
 	replaceEntries: (next: CustomSessionEntry[]) => void;
 	createContext: () => FakeCommandContext;
 	invokeCommand: (name: string, args?: string) => Promise<void>;
@@ -134,6 +138,7 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	let confirmResult = options.confirmResult ?? true;
 	let parentModel = options.parentModel;
 	let settings = options.settings;
+	let getAgentDir = options.getAgentDir;
 	const cwd = options.cwd ?? process.cwd();
 
 	const createContext = (): FakeCommandContext => ({
@@ -197,6 +202,9 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			get settings() {
 				return settings;
 			},
+			get getAgentDir() {
+				return getAgentDir;
+			},
 		},
 	};
 
@@ -225,6 +233,9 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		},
 		setSettings(next) {
 			settings = next;
+		},
+		setGetAgentDir(next) {
+			getAgentDir = next;
 		},
 		replaceEntries(next) {
 			entries.splice(0, entries.length, ...next);

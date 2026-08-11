@@ -5,6 +5,8 @@
  * Canonical form: `{ type: "string" }`.
  * Equivalents may add non-nullability constraints (e.g. minLength) but must
  * still declare `type: "string"` and must not admit null.
+ *
+ * OMP 17.2.13 also requires `outputSchemaMode: "strict"` alongside the schema.
  */
 export function isStrictTextOutputSchema(schema: unknown): boolean {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
@@ -13,4 +15,8 @@ export function isStrictTextOutputSchema(schema: unknown): boolean {
 	if (record.nullable === true) return false;
 	if (Array.isArray(record.enum) && record.enum.some((value) => value === null)) return false;
 	return true;
+}
+
+export function isStrictOutputSchemaMode(mode: unknown): boolean {
+	return mode === "strict";
 }

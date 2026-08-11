@@ -10,9 +10,13 @@ import {
 	PSTACK_MODEL_RULE_BASENAME,
 	PSTACK_SESSION_COMMANDS,
 } from "./helpers/runtime-expected-commands.ts";
-import { hasNonRecursiveBuiltInToolWhitelist } from "./helpers/runtime-agent-capabilities.ts";
+import {
+	hasNonRecursiveBuiltInToolWhitelist,
+	hasRestrictedToolNames,
+	requiresTerminalYieldWithTextData,
+} from "./helpers/runtime-agent-capabilities.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
-import { isStrictTextOutputSchema } from "./helpers/runtime-output-schema.ts";
+import { isStrictOutputSchemaMode, isStrictTextOutputSchema } from "./helpers/runtime-output-schema.ts";
 import { createFakeSettings } from "./helpers/runtime-settings.ts";
 
 // Public seams under test (absent until the green implementation lands).
@@ -253,22 +257,30 @@ describe("omp-pstack runtime extension", () => {
 		expect(reminder.length).toBeLessThan(POTETO_SKILL_BODY.length);
 	});
 
-	test("pstack-cleanup asks before deleting only the exact OMP model rule", async () => {
-		const rulesDir = join(homeDir, ".omp", "agent", "rules");
+	test("pstack-cleanup asks before deleting only the exact OMP model rule under active getAgentDir()", async () => {
+		const agentDir = "/tmp/profiles/work/agent";
+		const rulesDir = join(agentDir, "rules");
 		mkdirSync(rulesDir, { recursive: true });
 		const modelRulePath = join(rulesDir, PSTACK_MODEL_RULE_BASENAME);
 		const otherRulePath = join(rulesDir, "unrelated.md");
+		const homeFallbackPath = join(homeDir, ".omp", "agent", "rules", PSTACK_MODEL_RULE_BASENAME);
+		mkdirSync(join(homeDir, ".omp", "agent", "rules"), { recursive: true });
 		writeFileSync(modelRulePath, "feature, refactoring: auto\n", "utf8");
 		writeFileSync(otherRulePath, "keep me\n", "utf8");
+		writeFileSync(homeFallbackPath, "do not touch home fallback\n", "utf8");
 
+		runtime.setGetAgentDir(() => agentDir);
 		runtime.setConfirmResult(false);
 		loadExtension(runtime, { packageRoot, homeDir });
 		await runtime.invokeCommand("pstack-cleanup");
 
 		expect(runtime.confirmCalls.length).toBe(1);
+		expect(runtime.confirmCalls[0]!.message).toContain(modelRulePath);
 		expect(runtime.confirmCalls[0]!.message).toContain(PSTACK_MODEL_RULE_BASENAME);
+		expect(runtime.confirmCalls[0]!.message).not.toContain(homeFallbackPath);
 		expect(readFileSync(modelRulePath, "utf8")).toContain("feature, refactoring");
 		expect(readFileSync(otherRulePath, "utf8")).toBe("keep me\n");
+		expect(readFileSync(homeFallbackPath, "utf8")).toBe("do not touch home fallback\n");
 
 		runtime.setConfirmResult(true);
 		await runtime.invokeCommand("pstack-cleanup");
@@ -276,6 +288,25 @@ describe("omp-pstack runtime extension", () => {
 		expect(runtime.confirmCalls.length).toBe(2);
 		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
 		expect(readFileSync(otherRulePath, "utf8")).toBe("keep me\n");
+		expect(readFileSync(homeFallbackPath, "utf8")).toBe("do not touch home fallback\n");
+		rmSync(agentDir, { recursive: true, force: true });
+	});
+
+	test("pstack-cleanup falls back to homeDir/.omp/agent when getAgentDir is unavailable", async () => {
+		const rulesDir = join(homeDir, ".omp", "agent", "rules");
+		mkdirSync(rulesDir, { recursive: true });
+		const modelRulePath = join(rulesDir, PSTACK_MODEL_RULE_BASENAME);
+		writeFileSync(modelRulePath, "feature, refactoring: auto\n", "utf8");
+
+		// Explicitly omit getAgentDir so the extension must use the homeDir fallback.
+		runtime.setGetAgentDir(undefined);
+		runtime.setConfirmResult(true);
+		loadExtension(runtime, { packageRoot, homeDir });
+		await runtime.invokeCommand("pstack-cleanup");
+
+		expect(runtime.confirmCalls.length).toBe(1);
+		expect(runtime.confirmCalls[0]!.message).toContain(modelRulePath);
+		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
 	});
 });
 
@@ -610,15 +641,26 @@ describe("pstack_task tool seam", () => {
 		const ompOmissionError =
 			'OMP requires outputSchema: { type: "string" } (or equivalently strict non-null text schema) for yielded string results';
 
-		const calls: Array<{ id: string; outputSchema: unknown }> = [];
+		const calls: Array<{
+			id: string;
+			outputSchema: unknown;
+			outputSchemaMode: unknown;
+			restrictToolNames: unknown;
+		}> = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			// Injected runSubprocess is the native-runner seam; OMP reads outputSchema here.
 			const outputSchema = (options as { outputSchema?: unknown }).outputSchema;
-			calls.push({ id: options.id, outputSchema });
+			const outputSchemaMode = (options as { outputSchemaMode?: unknown }).outputSchemaMode;
+			const restrictToolNames = (options as { restrictToolNames?: unknown }).restrictToolNames;
+			calls.push({ id: options.id, outputSchema, outputSchemaMode, restrictToolNames });
 
-			// Simulate the OMP failure boundary: omitting a strict text schema rejects
-			// the yielded-string success path (non-zero exit, no model-visible yield).
-			if (!isStrictTextOutputSchema(outputSchema)) {
+			// Simulate the OMP failure boundary: omitting a strict text schema / mode / tool
+			// restriction rejects the yielded-string success path (non-zero exit).
+			if (
+				!isStrictTextOutputSchema(outputSchema) ||
+				!isStrictOutputSchemaMode(outputSchemaMode) ||
+				!hasRestrictedToolNames({ restrictToolNames })
+			) {
 				return {
 					id: options.id,
 					exitCode: 1,
@@ -651,6 +693,8 @@ describe("pstack_task tool seam", () => {
 			expect(calls).toHaveLength(2);
 			for (const call of calls) {
 				expect(isStrictTextOutputSchema(call.outputSchema)).toBe(true);
+				expect(isStrictOutputSchemaMode(call.outputSchemaMode)).toBe(true);
+				expect(hasRestrictedToolNames(call)).toBe(true);
 			}
 
 			const text = toolResultText(result);
@@ -724,6 +768,53 @@ describe("pstack_task tool seam", () => {
 		}
 	});
 
+	test("poteto AgentDefinition systemPrompt requires terminal yield with non-null result.data text", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-yield-prompt-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-yield-prompt-home-"));
+		writePackageFixture(packageRoot);
+		mkdirSync(join(packageRoot, "agents"), { recursive: true });
+		writeFileSync(
+			join(packageRoot, "agents", "poteto-agent.md"),
+			[
+				"---",
+				"name: poteto-agent",
+				"description: poteto worker",
+				"---",
+				"",
+				"# Poteto subagent",
+				"",
+				"Complete the assigned task thoroughly and return the result.",
+			].join("\n"),
+			"utf8",
+		);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const prompts: string[] = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			const agent = options.agent as { systemPrompt?: unknown } | undefined;
+			prompts.push(String(agent?.systemPrompt ?? ""));
+			return { exitCode: 0, id: options.id, output: "ok" };
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			await tool.execute(
+				"call-yield-prompt",
+				{ strategy: "panel", prompt: "finish with yield text", models: ["m1"] },
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			expect(prompts).toHaveLength(1);
+			expect(requiresTerminalYieldWithTextData(prompts[0])).toBe(true);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
 	test("every AgentDefinition passed to raw runSubprocess has a non-recursive built-in tool whitelist and empty spawns", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-caps-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-caps-home-"));
@@ -736,6 +827,9 @@ describe("pstack_task tool seam", () => {
 			agents.push({
 				agent,
 				requireYieldTool: (options as { requireYieldTool?: unknown }).requireYieldTool,
+				restrictToolNames: (options as { restrictToolNames?: unknown }).restrictToolNames,
+				outputSchema: (options as { outputSchema?: unknown }).outputSchema,
+				outputSchemaMode: (options as { outputSchemaMode?: unknown }).outputSchemaMode,
 			});
 			return { exitCode: 0, id: options.id, output: "ok" };
 		};
@@ -757,10 +851,18 @@ describe("pstack_task tool seam", () => {
 
 			expect(agents).toHaveLength(2);
 			for (const entry of agents) {
-				const agent = entry.agent as { tools?: unknown; spawns?: unknown } | undefined;
+				const agent = entry.agent as {
+					tools?: unknown;
+					spawns?: unknown;
+					systemPrompt?: unknown;
+				} | undefined;
 				expect(hasNonRecursiveBuiltInToolWhitelist(agent)).toBe(true);
+				expect(requiresTerminalYieldWithTextData(agent?.systemPrompt)).toBe(true);
 				// Yield remains available through requireYieldTool, not by listing recursive task tools.
 				expect(entry.requireYieldTool).toBe(true);
+				expect(hasRestrictedToolNames(entry)).toBe(true);
+				expect(isStrictTextOutputSchema(entry.outputSchema)).toBe(true);
+				expect(isStrictOutputSchemaMode(entry.outputSchemaMode)).toBe(true);
 				const tools = Array.isArray(agent?.tools) ? agent.tools : [];
 				expect(tools.includes("yield")).toBe(false);
 			}
