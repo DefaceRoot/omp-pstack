@@ -484,7 +484,98 @@ describe("pstack_task tool seam", () => {
 				undefined,
 				runtime.createContext(),
 			);
-			expect(toolResultText(result)).toContain("SHIP: auth looks solid");
+			const text = toolResultText(result);
+			expect(text).toContain("SHIP: auth looks solid");
+			// Success stays concise: no failure-channel labels.
+			expect(text).not.toMatch(/\berror:/i);
+			expect(text).not.toMatch(/\bstderr:/i);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("pstack_task content keeps partial output and labeled error/stderr on exit 1", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-fail-diag-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-fail-diag-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const partialOutput = "PARTIAL: worker reached review mid-flight";
+		const errorText = "runner crashed before yield";
+		const stderrText = "Traceback: ValueError: missing schema";
+		const runSubprocess: RunSubprocessFn = async (options) => ({
+			exitCode: 1,
+			id: options.id,
+			output: partialOutput,
+			error: errorText,
+			stderr: stderrText,
+		});
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				"call-fail-diag",
+				{
+					strategy: "slice",
+					slices: [{ id: "worker-a", task: "review auth" }],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			const text = toolResultText(result);
+			expect(text).toContain("worker-a: exit 1");
+			expect(text).toContain(partialOutput);
+			expect(text).toContain(`error: ${errorText}`);
+			expect(text).toContain(`stderr: ${stderrText}`);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("pstack_task content dedupes identical error and stderr on exit 1", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-fail-dedupe-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-fail-dedupe-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const partialOutput = "PARTIAL: got some tokens before failure";
+		const sharedDiagnostic = "subprocess terminated with signal";
+		const runSubprocess: RunSubprocessFn = async (options) => ({
+			exitCode: 1,
+			id: options.id,
+			output: partialOutput,
+			error: sharedDiagnostic,
+			stderr: sharedDiagnostic,
+		});
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				"call-fail-dedupe",
+				{
+					strategy: "slice",
+					slices: [{ id: "worker-b", task: "review billing" }],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			const text = toolResultText(result);
+			expect(text).toContain("worker-b: exit 1");
+			expect(text).toContain(partialOutput);
+			expect(text).toContain(`error: ${sharedDiagnostic}`);
+			// Identical channels must not be repeated under a second label.
+			expect(text).not.toContain(`stderr: ${sharedDiagnostic}`);
+			expect(text.split(sharedDiagnostic)).toHaveLength(2);
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
