@@ -70,7 +70,18 @@ const PSTACK_TRIAL_COMMANDS = [
 	"/pstack-off",
 ] as const;
 
-const TEAM_KIT_COMMANDS = ["/deslop", "/control-cli", "/control-ui"] as const;
+/** Normalized fenced example lines currently required for team-kit skills. */
+const TEAM_KIT_EXAMPLE_LINES = [
+	"/deslop Review the current branch diff against main and remove AI-generated code slop without changing behavior.",
+	"/control-cli Reproduce the startup hang in `bun run tui`, enter `help`, then press Ctrl-C; capture the terminal transcript.",
+	"/control-ui Start `bun run dev`, open http://localhost:3000, submit the login form, and capture a screenshot plus an accessibility snapshot.",
+] as const;
+
+/** Explicit uninstall clauses — pin wording, do not fuzzy-match polarity. */
+const REQUIRED_REMOTE_MANAGED_UNINSTALL_CLAUSE =
+	"For a GitHub remote install, uninstall removes OMP's managed installed copy.";
+const REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE =
+	"For a local-link install from a local checkout, uninstall removes only OMP's plugin registration/link; it never deletes the user-owned checkout or working tree.";
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
@@ -130,46 +141,6 @@ function uninstallSentences(text: string): string[] {
 				.map((part) => part.trim())
 				.filter((part) => part.length > 0 && /uninstall/i.test(part)),
 		);
-}
-
-/** Determiners/adjectives allowed between a verb and its object. */
-const VERB_OBJECT_DETERMINERS =
-	"(?:(?:the|your|a|an|only|user-owned|local|omp'?s|managed|installed|plugin)\\s+)*";
-
-/**
- * Polarity-bound verb→object matcher.
- * `never deletes X` is negative; bare `deletes X` is affirmative.
- * Rejects vacuities where `\bdeletes\b` matches inside `never deletes`.
- */
-function hasPolarVerbObject(
-	sentence: string,
-	verbs: string,
-	objectPattern: string,
-	polarity: "affirmative" | "negative",
-): boolean {
-	const re = new RegExp(
-		String.raw`\b(?:(never|does not|doesn't)\s+)?(${verbs})\s+${VERB_OBJECT_DETERMINERS}(?:${objectPattern})\b`,
-		"gi",
-	);
-	for (const match of sentence.matchAll(re)) {
-		const isNegative = Boolean(match[1]);
-		if (polarity === "affirmative" && !isNegative) return true;
-		if (polarity === "negative" && isNegative) return true;
-	}
-	return false;
-}
-
-/** Reject empty or placeholder-only task/input (e.g. `<task>`, `TODO`). */
-function isConcreteTaskInput(task: string): boolean {
-	const trimmed = task.trim();
-	if (trimmed.length === 0) return false;
-	if (/^<[^<>]+>$/.test(trimmed)) return false;
-	if (/^\{[^{}]+\}$/.test(trimmed)) return false;
-	if (/^\[[^\[\]]+\]$/.test(trimmed)) return false;
-	if (/^(TODO|FIXME|TBD|WIP)$/i.test(trimmed)) return false;
-	if (/^(\.{3}|…)$/.test(trimmed)) return false;
-	if (/^task$/i.test(trimmed)) return false;
-	return true;
 }
 
 function collectLicenseTexts(): Array<{ path: string; text: string }> {
@@ -243,7 +214,7 @@ test("README documents exact remote/local install, disable, cleanup, uninstall, 
 	expect(readme).toContain(PACKAGE_NAME);
 });
 
-test("README fences a runnable P-Stack trial and team-kit slash examples with nonempty task input", () => {
+test("README fences a runnable P-Stack trial and pinned team-kit slash example lines", () => {
 	const readme = readReadme();
 	const lines = fencedExampleLines(readme);
 
@@ -252,16 +223,10 @@ test("README fences a runnable P-Stack trial and team-kit slash examples with no
 		expect(lines).toContain(command);
 	}
 
-	// Each team-kit slash example must be a fenced line with a concrete nonempty task/input.
-	// Placeholder-only inputs like `<task>` or `TODO` do not count.
-	for (const command of TEAM_KIT_COMMANDS) {
-		const runnable = lines.find((line) => {
-			if (!line.startsWith(`${command} `) && line !== command) return false;
-			const task = line.slice(command.length).trim();
-			return isConcreteTaskInput(task);
-		});
-		expect(runnable).toBeDefined();
-		expect(isConcreteTaskInput(runnable!.slice(command.length))).toBe(true);
+	// Pin the normalized current team-kit example lines (concrete task/input included).
+	// Placeholder lines like `/deslop TODO: add task` or `/control-ui example` must not satisfy these.
+	for (const example of TEAM_KIT_EXAMPLE_LINES) {
+		expect(lines).toContain(example);
 	}
 });
 
@@ -295,52 +260,9 @@ test("README pins remote managed-copy removal and local-checkout non-deletion in
 	const bounded = uninstallSentences(readme);
 	expect(bounded.length).toBeGreaterThan(0);
 
-	// Affirmative remote managed-copy removal must live in its own uninstall sentence.
-	// `never deletes ... managed copy` must not satisfy this (polarity-bound).
-	const remoteManagedRemoval = bounded.find(
-		(sentence) =>
-			/(GitHub remote|remote install|managed)/i.test(sentence) &&
-			hasPolarVerbObject(
-				sentence,
-				"removes|deletes",
-				"managed (?:installed )?copy|installed copy",
-				"affirmative",
-			),
-	);
-	expect(remoteManagedRemoval).toBeDefined();
-
-	// Explicit negative local-checkout deletion must bind the negation to checkout/working tree.
-	// `does not remove metadata but deletes the checkout` must not satisfy this.
-	const localCheckoutPreserved = bounded.find(
-		(sentence) =>
-			/(local(-|\s)?link|local checkout)/i.test(sentence) &&
-			hasPolarVerbObject(
-				sentence,
-				"removes|deletes",
-				"checkout|working tree",
-				"negative",
-			) &&
-			!hasPolarVerbObject(
-				sentence,
-				"removes|deletes",
-				"checkout|working tree",
-				"affirmative",
-			),
-	);
-	expect(localCheckoutPreserved).toBeDefined();
-
-	// Local-link uninstall affirmatively removes registration/link (not `never removes`).
-	const localLinkRegistration = bounded.find(
-		(sentence) =>
-			/(local(-|\s)?link|local checkout)/i.test(sentence) &&
-			hasPolarVerbObject(
-				sentence,
-				"removes?",
-				"registration(?:\/link)?|link",
-				"affirmative",
-			),
-	);
-	expect(localLinkRegistration).toBeDefined();
+	// Exact required clauses — wording pins polarity so fuzzy "no longer removes" cannot pass.
+	expect(bounded).toContain(REQUIRED_REMOTE_MANAGED_UNINSTALL_CLAUSE);
+	expect(bounded).toContain(REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE);
 });
 
 test("README links canonical upstream sources and root licensing retains separate Lauren Tan and Cursor notices", () => {
