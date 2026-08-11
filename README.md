@@ -50,6 +50,29 @@ Run `/poteto-mode` to enable the P-Stack workflow guidance for the current sessi
 
 P-Stack's other shipped skills are available as native OMP slash commands. Their source content lives in package paths such as `skills/poteto-mode/`.
 
+### Try the workflows
+
+Run this representative P-Stack trial in an OMP session rooted at your project:
+
+```text
+/setup-pstack
+/poteto-mode
+/pstack-status
+/pstack-off
+```
+
+`/setup-pstack` takes your model choices, `/poteto-mode` enables the workflow guidance for the session, `/pstack-status` verifies it, and `/pstack-off` disables it.
+
+The bundled cursor-team-kit skills accept a concrete task after the slash command:
+
+```text
+/deslop Review the current branch diff against main and remove AI-generated code slop without changing behavior.
+/control-cli Reproduce the startup hang in `bun run tui`, enter `help`, then press Ctrl-C; capture the terminal transcript.
+/control-ui Start `bun run dev`, open http://localhost:3000, submit the login form, and capture a screenshot plus an accessibility snapshot.
+```
+
+`/deslop` cleans up code style using the current branch diff as input. `/control-cli` drives and inspects an interactive CLI or TUI using the command and terminal actions you provide. `/control-ui` drives a browser or Electron UI using the local start command, URL, interactions, and requested evidence.
+
 ### Run parallel model work
 
 The extension registers the native `pstack_task` tool for P-Stack workflows and agents:
@@ -79,7 +102,9 @@ For a clean removal, perform these steps while the plugin is still enabled:
    omp plugin uninstall @defaceroot/omp-pstack
    ```
 
-Uninstalling removes package-owned assets shipped by the plugin, including its installed `src/`, `skills/`, `agents/`, `automations/`, documentation, and license files. It does not remove user-created or user-generated artifacts: project files, worktrees, branches, reports, configuration, or other outputs produced during P-Stack workflows remain yours. The generated `~/.omp/agent/rules/pstack-models.md` also remains unless you explicitly confirm `/pstack-cleanup` before uninstalling; if the plugin has already been uninstalled, inspect and remove that one file manually if desired.
+For a GitHub remote install, uninstall removes OMP's managed installed copy. For a local-link install from a local checkout, uninstall removes only OMP's plugin registration/link; it never deletes the user-owned checkout or working tree.
+
+Uninstall removes package-owned assets shipped by the plugin, including its installed `src/`, `skills/`, `agents/`, `automations/`, documentation, and license files. It does not remove user-generated project artifacts: project files, worktrees, branches, reports, configuration, and other P-Stack outputs remain yours. `/pstack-cleanup` also does not remove those artifacts or the local checkout; when confirmed, it deletes only `~/.omp/agent/rules/pstack-models.md`, and declining leaves that file unchanged. If the plugin has already been uninstalled, inspect and remove that one generated rule manually if desired.
 
 ## Upstream and licensing
 
