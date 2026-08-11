@@ -29,9 +29,9 @@ Use local browser automation to verify UI behavior with evidence. First reuse th
 Use OMP's native `browser` tool before assembling a one-off script:
 
 1. Start a dev server or Electron process with `hub start`; use its log pattern and port readiness checks instead of sleeping.
-2. Call `browser` with action `open` once. Supply the local URL for a web app, or `app.cdp_url` for an existing Chromium DevTools Protocol endpoint.
+2. Call `browser` with action `open` once, then reuse that tab. The one exception is a target-bound CDP reopen, which must acquire a new attached tab — see Generic CDP Harness. Supply the local URL for a web app, or `app.cdp_url` for an existing Chromium DevTools Protocol endpoint.
 3. Call `browser` with action `run` whose only job is observation: `return await tab.observe()` or `return await tab.ariaSnapshot()`, so the accessibility structure is displayed in the tool result before anything is clicked.
-4. Choose the target from that surfaced output, then act in a subsequent `run` through the returned refs, roles, labels, or `data-*` selectors. If the page navigated or re-rendered in between, its refs are stale: re-snapshot and act inside that same later run.
+4. Choose the target from that surfaced output, then act in a subsequent `run` through the returned refs, roles, labels, or `data-*` selectors. If the page navigated or re-rendered in between, its refs are stale: do a fresh observation-only run that returns the refreshed snapshot, then choose again from that surfaced output and act in a separate run.
 5. Use `tab.screenshot()` only when visual appearance is evidence; use structural observations for state and accessibility checks.
 6. Reuse the named browser tab for the full interaction, then close it and stop the process with `hub stop`.
 
@@ -65,7 +65,13 @@ const pages = await browser.pages();
 return await Promise.all(pages.map(async (p) => ({ url: p.url(), title: await p.title() })));
 ```
 
-Take the entry carrying the stable app marker, then bind that page explicitly: call `open` again with the same `app.cdp_url` plus `app.target` set to a title or URL substring unique to it. Observe and act only after that binding. `tab.observe()` reads whichever page OMP is already bound to; it cannot move the binding to another page.
+Take the entry carrying the stable app marker, then bind that page explicitly. `app.target` is applied only while OMP acquires a new attached tab, so reopening onto the already-attached discovery tab silently keeps the old binding. Acquire a new attached tab instead: call `open` again with the same `app.cdp_url` and `app.target` set to a title or URL substring unique to the chosen page, under a new tab name — or close the discovery tab first and reuse its name.
+
+```json
+{ "action": "open", "name": "app-main", "app": { "cdp_url": "http://127.0.0.1:9222", "target": "Settings — MyApp" } }
+```
+
+Observe and act only after that binding, each in its own `run`. `tab.observe()` reads whichever page the tab is already attached to; it cannot move the binding to another page.
 
 If the repository already provides Playwright and its own harness, `chromium.connectOverCDP(...)` remains an appropriate repo-native path. Do not add it solely for the probe.
 
@@ -94,12 +100,12 @@ When multiple app windows/tabs share a debug port:
 
 - Prefer a positive marker for the surface under test, such as an app root selector.
 - Use a negative marker to avoid the wrong surface when necessary.
-- Bind the surface under test with an explicit `app.target` marker rather than trusting page order or the endpoint's first page.
+- Bind the surface under test with an explicit `app.target` marker rather than trusting page order or the endpoint's first page, and remember that the marker is honored only while a new attached tab is acquired.
 - If no page matches, list available page titles and URLs instead of guessing.
 
 ## Guardrails
 
-- Do not rely on stale element references after navigation or structural changes.
+- Do not rely on stale element references after navigation or structural changes: refresh them in an observation-only run, then act from that surfaced output in a separate run.
 - Avoid coordinate clicks unless a fresh screenshot was captured immediately before the click.
 - Keep test data local and disposable.
 - Do not store screenshots or heap snapshots from privacy-sensitive workspaces unless the user explicitly agrees.
