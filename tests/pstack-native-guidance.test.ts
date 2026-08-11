@@ -25,6 +25,11 @@ import { join } from "node:path";
  * refuse or state change, stop and rerun audit / show current contents. Forbid
  * default `git worktree remove --force` and `rm -rf`; force only after a
  * separate fresh status and explicit destructive confirmation for exact paths.
+ * Detached linked worktrees are never removed merely because a review row was
+ * confirmed: before any detached removal, verify HEAD is reachable from a
+ * durable branch/tag ref; if not, create or offer a named backup ref and require
+ * explicit confirmation. Scope any "refs survive removal" reassurance to
+ * branch-attached worktrees only.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -94,6 +99,26 @@ const REFUSE_OR_STATE_CHANGE_STOP_RERUN =
 const FORCE_AFTER_FRESH_STATUS_AND_DESTRUCTIVE_CONFIRMATION =
 	/(?:fresh (?:git )?status|separate fresh status)[\s\S]{0,160}(?:explicit )?(?:destructive )?confirmation[\s\S]{0,120}exact paths?|(?:--force|force)[\s\S]{0,200}(?:fresh (?:git )?status|separate fresh status)[\s\S]{0,160}(?:explicit )?(?:destructive )?confirmation[\s\S]{0,80}exact paths?/i;
 
+/** Detached worktrees must not be removed merely because a review row was confirmed. */
+const DETACHED_NOT_REMOVED_ON_REVIEW_ROW_ALONE =
+	/detached[\s\S]{0,240}(?:never|not|must not)[\s\S]{0,120}(?:remov|prun|delet)[\s\S]{0,200}(?:review row|confirmed (?:a )?review|merely because)|(?:review row|merely because[\s\S]{0,80}(?:review|confirm))[\s\S]{0,200}detached/i;
+
+/** Before detached removal: verify HEAD is reachable from a durable branch/tag ref. */
+const DETACHED_HEAD_REACHABLE_FROM_DURABLE_REF =
+	/detached[\s\S]{0,220}(?:reachable|reachability|verify)[\s\S]{0,160}(?:durable )?(?:branch|tag)(?:\/|\s*\/\s*|,|\s+or\s+|\s+)(?:tag|branch)?\s*refs?|(?:reachable from|reachability)[\s\S]{0,100}(?:durable )?(?:branch(?:\/|\s+or\s+|\/)tag|tag(?:\/|\s+or\s+|\/)branch|branch|tag)\s*refs?/i;
+
+/** If HEAD is not on a durable ref: create or offer a named backup ref + explicit confirmation. */
+const DETACHED_BACKUP_REF_AND_EXPLICIT_CONFIRMATION =
+	/(?:backup ref|named (?:backup )?ref)[\s\S]{0,180}(?:explicit )?(?:user )?confirmation|(?:create|offer)[\s\S]{0,100}(?:named )?(?:backup )?ref[\s\S]{0,180}(?:explicit )?(?:user )?confirmation/i;
+
+/** Any "refs survive removal" reassurance must be scoped to branch-attached worktrees. */
+const REFS_SURVIVE_SCOPED_TO_BRANCH_ATTACHED =
+	/branch-attached[\s\S]{0,160}(?:branch )?refs? survive|(?:branch )?refs? survive[\s\S]{0,160}branch-attached/i;
+
+/** Unscoped claim that branch/refs survive (overclaims for detached HEAD). */
+const UNSCOPED_REFS_SURVIVE =
+	/(?:Branch refs survive|refs survive[\s\S]{0,80}(?:no commits? (?:are )?lost|commits? (?:are )?not lost))/i;
+
 function readSeam(path: string): string {
 	expect(existsSync(path)).toBe(true);
 	return readFileSync(path, "utf8");
@@ -139,7 +164,7 @@ describe("pstack native guidance content contracts", () => {
 		);
 	});
 
-	test("worktree cleanup pins scratch-safe gates, ordinary remove, and gated force", () => {
+	test("worktree cleanup pins scratch-safe gates, ordinary remove, gated force, and detached HEAD backup refs", () => {
 		const body = readSeam(WORKTREE_CLEANUP);
 		const violations: string[] = [];
 
@@ -182,6 +207,31 @@ describe("pstack native guidance content contracts", () => {
 		if (!FORCE_AFTER_FRESH_STATUS_AND_DESTRUCTIVE_CONFIRMATION.test(body)) {
 			violations.push(
 				"force is not gated behind fresh status + explicit destructive confirmation for exact paths",
+			);
+		}
+		if (!DETACHED_NOT_REMOVED_ON_REVIEW_ROW_ALONE.test(body)) {
+			violations.push(
+				"detached linked worktrees must not be removed merely because a review row was confirmed",
+			);
+		}
+		if (!DETACHED_HEAD_REACHABLE_FROM_DURABLE_REF.test(body)) {
+			violations.push(
+				"before detached removal, missing verify HEAD reachable from durable branch/tag ref",
+			);
+		}
+		if (!DETACHED_BACKUP_REF_AND_EXPLICIT_CONFIRMATION.test(body)) {
+			violations.push(
+				"detached unreachable HEAD missing named backup ref create/offer + explicit confirmation",
+			);
+		}
+		if (UNSCOPED_REFS_SURVIVE.test(body) && !REFS_SURVIVE_SCOPED_TO_BRANCH_ATTACHED.test(body)) {
+			violations.push(
+				"refs-survive reassurance overclaims branch refs; must scope to branch-attached worktrees only",
+			);
+		}
+		if (!REFS_SURVIVE_SCOPED_TO_BRANCH_ATTACHED.test(body)) {
+			violations.push(
+				"missing refs-survive reassurance scoped to branch-attached worktrees only",
 			);
 		}
 
