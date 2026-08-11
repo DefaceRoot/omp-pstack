@@ -316,36 +316,54 @@ describe("context and stack discovery", () => {
       const source = `
 import { orderStack, WatcherQueryError } from ${JSON.stringify(githubHref)};
 import { parsePrNumber } from ${JSON.stringify(typesHref)};
-const context = { owner: "owner", repo: "repo", number: parsePrNumber(42) };
-try {
-  const ordered = orderStack(context, [
-    {
-      number: context.number,
-      headRefName: "feature-a",
-      baseRefName: "feature-b",
-    },
-    {
-      number: parsePrNumber(43),
-      headRefName: "feature-b",
-      baseRefName: "feature-a",
-    },
-  ]);
-  postMessage({
-    status: "returned",
-    numbers: ordered.map((item) => Number(item.number)),
-  });
-} catch (error) {
-  postMessage({
-    status: "threw",
-    name: error instanceof Error ? error.name : null,
-    isWatcherQueryError: error instanceof WatcherQueryError,
-  });
-}
+postMessage({ status: "ready" });
+onmessage = (event) => {
+  if (event.data?.type !== "start") return;
+  const context = { owner: "owner", repo: "repo", number: parsePrNumber(42) };
+  try {
+    const ordered = orderStack(context, [
+      {
+        number: context.number,
+        headRefName: "feature-a",
+        baseRefName: "feature-b",
+      },
+      {
+        number: parsePrNumber(43),
+        headRefName: "feature-b",
+        baseRefName: "feature-a",
+      },
+    ]);
+    postMessage({
+      status: "returned",
+      numbers: ordered.map((item) => Number(item.number)),
+    });
+  } catch (error) {
+    postMessage({
+      status: "threw",
+      name: error instanceof Error ? error.name : null,
+      isWatcherQueryError: error instanceof WatcherQueryError,
+    });
+  }
+};
 `;
       const worker = new Worker(
         URL.createObjectURL(new Blob([source], { type: "text/javascript" }))
       );
       try {
+        // Cold Worker/module startup finishes before the traversal deadline starts.
+        const ready = await Promise.race([
+          new Promise<unknown>((resolve, reject) => {
+            worker.onmessage = (event: MessageEvent) => resolve(event.data);
+            worker.onerror = (event: ErrorEvent) =>
+              reject(new Error(event.message));
+          }),
+          Bun.sleep(1500).then(() => {
+            throw new Error("worker readiness timed out");
+          }),
+        ]);
+        expect(ready).toEqual({ status: "ready" });
+
+        worker.postMessage({ type: "start" });
         const outcome = await Promise.race([
           new Promise<{
             readonly kind: "message";
