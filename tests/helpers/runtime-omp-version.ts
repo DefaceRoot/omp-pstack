@@ -4,6 +4,7 @@
  * Public seam: `ExtensionAPI.pi.VERSION` (coding-agent package index export).
  * Minimum supported host: stable `17.2.13`.
  *
+ * Final RED follow-up #2 after e38bc0d (with mkdtemp profile fixture + optional peer meta):
  * Semver note (asserted by runtime-extension RED, not by a helper here):
  * - `17.2.13-beta.1` is < `17.2.13` and must be rejected
  * - stable `17.2.13` is accepted

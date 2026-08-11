@@ -126,6 +126,10 @@ describe("omp-pstack runtime extension", () => {
 		rmSync(homeDir, { recursive: true, force: true });
 	});
 
+	// Final RED follow-ups after e38bc0d (this commit owns all three):
+	// 1) getAgentDir profile fixture under join(homeDir,'profiles','work','agent') — no fixed /tmp path
+	// 2) reject pi.pi.VERSION 17.2.13-beta.1 as < stable 17.2.13
+	// 3) package peerDependenciesMeta optional (asserted in package-install.test.ts)
 	test("extension initialization rejects pi.pi.VERSION below 17.2.13 with a clear minimum-version error", () => {
 		// Semver prerelease of the exact floor is still < stable 17.2.13
 		// (17.2.13-beta.1 must reject). Assert public init behavior only —
