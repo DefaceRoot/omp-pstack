@@ -589,7 +589,7 @@ export class GhGitHubReader implements T.GitHubReader {
         at(value, ["data", "repository", "pullRequest", "reviewThreads"]),
         "reviewThreads"
       );
-      nodes.push(...list(reviewThreads.nodes, "reviewThreads.nodes"));
+      const pageNodes = list(reviewThreads.nodes, "reviewThreads.nodes");
       const page = record(reviewThreads.pageInfo, "reviewThreads.pageInfo");
       if (typeof page.hasNextPage !== "boolean")
         missing("reviewThreads.pageInfo.hasNextPage", page.hasNextPage);
@@ -597,8 +597,13 @@ export class GhGitHubReader implements T.GitHubReader {
         page.endCursor,
         "reviewThreads.pageInfo.endCursor"
       );
-      if (!page.hasNextPage || !cursor || cursors.has(cursor)) break;
-      cursors.add(cursor);
+      if (page.hasNextPage) {
+        if (!cursor || cursors.has(cursor))
+          missing("reviewThreads.pageInfo.endCursor", cursor);
+        cursors.add(cursor);
+      }
+      nodes.push(...pageNodes);
+      if (!page.hasNextPage) break;
       after = cursor;
     }
     return parseReviewThreadNodes(nodes);
