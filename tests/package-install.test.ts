@@ -21,7 +21,9 @@ const PACKAGE_VERSION = "0.1.0";
 const EXTENSION_ENTRY = "./src/extension.ts";
 const UPSTREAM_COMMIT = "6f7e183aa9f48805c38746705fe6a17d42cafb94";
 const UPSTREAM_VERSION = "0.14.0";
-const GENERATED_MODEL_RULE = "~/.omp/agent/rules/pstack-models.md";
+/** Derived active-profile rule path — not a hardcoded universal ~/.omp/agent location. */
+const GENERATED_MODEL_RULE = "<agent_dir>/rules/pstack-models.md";
+const DEFAULT_PROFILE_AGENT_EXAMPLE = "~/.omp/agent";
 
 const REQUIRED_PUBLISH_PATHS = [
 	"src",
@@ -97,6 +99,27 @@ const STALE_SYMLINK_PATH =
 const STALE_SYMLINK_RM_COMMAND =
 	'rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"';
 
+/**
+ * README must declare the runtime floor explicitly and explain why.
+ * package.json peerDependency is owned by NativeYieldRed — do not assert it here.
+ */
+const REQUIRED_OMP_RUNTIME_FLOOR = "OMP >=17.2.13";
+const REQUIRED_OMP_RUNTIME_SAFETY_CLAUSE =
+	"Requires OMP >=17.2.13 for runtime safety: local-link uninstall may leave a stale node_modules symlink, and the doctor-then-manual-rm cleanup contract depends on that OMP runtime behavior.";
+
+/**
+ * Profile-aware generated-rule contract. Pin exact wording after whitespace
+ * normalization only — ~/.omp/agent may appear only as a labeled default example.
+ */
+const REQUIRED_PROFILE_CONFIG_CLAUSE =
+	"Resolve the active agent_dir with `omp config path` (honors `--profile` / `OMP_PROFILE`).";
+const REQUIRED_PROFILE_RULE_PATH_CLAUSE =
+	"The generated model-routing rule is `<agent_dir>/rules/pstack-models.md`.";
+const REQUIRED_PROFILE_COMMAND_CLAUSE =
+	"`/setup-pstack` and `/pstack-cleanup` operate on the active OMP profile.";
+const REQUIRED_DEFAULT_PROFILE_EXAMPLE_CLAUSE =
+	"The default-profile path `~/.omp/agent` is an example only, not universal.";
+
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
 
@@ -105,6 +128,7 @@ type PackageJson = {
 	version?: unknown;
 	private?: unknown;
 	scripts?: Record<string, unknown>;
+	peerDependencies?: Record<string, unknown>;
 	files?: unknown;
 	omp?: { extensions?: unknown };
 	pstackPort?: {
@@ -280,16 +304,17 @@ test("README fences a runnable P-Stack trial and pinned team-kit slash example l
 	}
 });
 
-test("README polarity-binds cleanup to the generated model rule and preserves user artifacts", () => {
+test("README polarity-binds cleanup to the derived active-profile rule and preserves user artifacts", () => {
 	const readme = readReadme();
+	const normalized = normalizeWhitespace(readme);
 	const escapedRule = GENERATED_MODEL_RULE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 	expect(readme).toMatch(/plugin-owned|package-owned|shipped by the plugin/i);
 	expect(readme).toMatch(/user-generated|user-created|user-owned/i);
-	expect(readme).toContain(GENERATED_MODEL_RULE);
+	expect(normalized).toContain(normalizeWhitespace(GENERATED_MODEL_RULE));
 	expect(readme).toMatch(/\bskills\/\b/);
 
-	// Confirmed cleanup deletes only the generated rule (markdown backticks allowed around the path).
+	// Confirmed cleanup deletes only the derived active-profile rule path.
 	expect(readme).toMatch(
 		new RegExp(
 			`/pstack-cleanup[\\s\\S]{0,500}deletes only \\\`?${escapedRule}\\\`?`,
@@ -303,6 +328,29 @@ test("README polarity-binds cleanup to the generated model rule and preserves us
 	expect(readme).toMatch(
 		/(uninstall|\/pstack-cleanup)[\s\S]{0,500}(does not (remove|delete)|leaves?|remain)[\s\S]{0,200}(local checkout|checkout|working tree)/i,
 	);
+});
+
+test("README pins profile-aware agent_dir resolution for setup/cleanup rule paths", () => {
+	const readme = readReadme();
+	const normalized = normalizeWhitespace(readme);
+
+	expect(normalized).toContain(normalizeWhitespace(REQUIRED_PROFILE_CONFIG_CLAUSE));
+	expect(normalized).toContain(normalizeWhitespace(REQUIRED_PROFILE_RULE_PATH_CLAUSE));
+	expect(normalized).toContain(normalizeWhitespace(REQUIRED_PROFILE_COMMAND_CLAUSE));
+	expect(normalized).toContain(normalizeWhitespace(REQUIRED_DEFAULT_PROFILE_EXAMPLE_CLAUSE));
+	expect(normalized).toContain("omp config path");
+	expect(normalized).toContain(normalizeWhitespace(GENERATED_MODEL_RULE));
+	expect(normalized).toContain("--profile");
+	expect(normalized).toContain("OMP_PROFILE");
+	expect(normalized).toContain(DEFAULT_PROFILE_AGENT_EXAMPLE);
+});
+
+test("README requires OMP >=17.2.13 and explains the runtime safety dependency", () => {
+	const readme = readReadme();
+	const normalized = normalizeWhitespace(readme);
+
+	expect(normalized).toContain(REQUIRED_OMP_RUNTIME_FLOOR);
+	expect(normalized).toContain(normalizeWhitespace(REQUIRED_OMP_RUNTIME_SAFETY_CLAUSE));
 });
 
 test("README pins OMP 17.2.13 remote/local uninstall and stale symlink cleanup", () => {
