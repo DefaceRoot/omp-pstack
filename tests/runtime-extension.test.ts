@@ -516,7 +516,30 @@ describe("pstack_task tool seam", () => {
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			calls.push({ id: options.id, task: options.task });
 			await Bun.sleep(15);
+			// Native runner echoes its runtime registry id; tool details must still
+			// remap results[].id back to the requested logical assignment id.
 			return { exitCode: 0, id: options.id, output: `done:${options.task}` };
+		};
+
+		const expectLogicalResultIds = (
+			result: unknown,
+			expectedLogicalIds: string[],
+			runtimeIdsForCall: string[],
+		): void => {
+			const details = resultDetails(result);
+			const results = Array.isArray(details.results)
+				? (details.results as Array<{ id?: string; runtimeId?: string }>)
+				: [];
+			expect(results).toHaveLength(expectedLogicalIds.length);
+			for (const [index, logicalId] of expectedLogicalIds.entries()) {
+				expect(results[index]?.id).toBe(logicalId);
+				const runtimeId = results[index]?.runtimeId;
+				if (runtimeId !== undefined) {
+					expect(typeof runtimeId).toBe("string");
+					expect(runtimeIdsForCall).toContain(runtimeId);
+					expect(runtimeId).not.toBe(logicalId);
+				}
+			}
 		};
 
 		try {
@@ -558,40 +581,16 @@ describe("pstack_task tool seam", () => {
 			const runtimeIds = calls.map((call) => String(call.id));
 			expect(runtimeIds).toHaveLength(4);
 			expect(new Set(runtimeIds).size).toBe(4);
-			// User-colliding / reserved logical ids must not be used verbatim as native runtime ids.
+			// Unique native runtime IDs are observable only via injected runSubprocess.
 			expect(runtimeIds.includes("Main")).toBe(false);
 			expect(runtimeIds.filter((id) => id === "panel-0")).toHaveLength(0);
 
 			const collidingText = toolResultText(colliding);
 			expect(collidingText).toContain("Main");
-			const collidingDetails = resultDetails(colliding);
-			const collidingResults = Array.isArray(collidingDetails.results)
-				? (collidingDetails.results as Array<{ id?: string }>)
-				: [];
-			const collidingAssignments = Array.isArray(collidingDetails.assignments)
-				? (collidingDetails.assignments as Array<{ id?: string }>)
-				: [];
-			const logicalIds = [
-				...collidingResults.map((item) => item.id),
-				...collidingAssignments.map((item) => item.id),
-			].filter(Boolean);
-			expect(logicalIds.filter((id) => id === "Main").length).toBeGreaterThanOrEqual(2);
-
-			const panelLogical = [
-				...((Array.isArray(resultDetails(panelA).assignments)
-					? resultDetails(panelA).assignments
-					: []) as Array<{ id?: string }>),
-				...((Array.isArray(resultDetails(panelB).assignments)
-					? resultDetails(panelB).assignments
-					: []) as Array<{ id?: string }>),
-				...((Array.isArray(resultDetails(panelA).results)
-					? resultDetails(panelA).results
-					: []) as Array<{ id?: string }>),
-				...((Array.isArray(resultDetails(panelB).results)
-					? resultDetails(panelB).results
-					: []) as Array<{ id?: string }>),
-			].map((item) => item.id);
-			expect(panelLogical.filter((id) => id === "panel-0")).toHaveLength(2);
+			// Pin each returned details.results[i].id to the requested logical assignment id.
+			expectLogicalResultIds(colliding, ["Main", "Main"], runtimeIds.slice(0, 2));
+			expectLogicalResultIds(panelA, ["panel-0"], runtimeIds.slice(2, 3));
+			expectLogicalResultIds(panelB, ["panel-0"], runtimeIds.slice(3, 4));
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
