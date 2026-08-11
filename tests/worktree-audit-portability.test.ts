@@ -36,6 +36,12 @@
  *     confirmed absence (session discovery failure/unknown) and never mark a
  *     merged clean no-PR candidate safe — today's `[ -d ] || [ -e ] || [ -L ]`
  *     gate on the XDG profile root silently omits the store;
+ *     additional XDG session roots follow OMP DirResolver gates:
+ *     only on linux/darwin and only when isDefault (active agent_dir equals
+ *     the profile-derived default); with default profile plus custom
+ *     PI_CODING_AGENT_DIR, scan only <custom-agent_dir>/sessions and never
+ *     inactive $XDG_DATA_HOME/omp/sessions (no cross-root transcript leakage /
+ *     false recent hold); on Windows (win32) ignore XDG entirely;
  *     a valid sessions-root symlink to a directory that holds a matching recent
  *     .jsonl must still be discovered (verify-recent-chat / not-safe), not skipped
  *     by plain find -P traversal of the symlink root;
@@ -113,6 +119,7 @@ type AuditEnv = {
 	XDG_DATA_HOME?: string;
 	OMP_PROFILE?: string;
 	PI_PROFILE?: string;
+	PI_CODING_AGENT_DIR?: string;
 };
 
 const fixtures: string[] = [];
@@ -379,6 +386,9 @@ function runAudit(fixture: Fixture, auditEnv: AuditEnv = {}): AuditResult {
 	}
 	if (auditEnv.PI_PROFILE !== undefined) {
 		env.PI_PROFILE = auditEnv.PI_PROFILE;
+	}
+	if (auditEnv.PI_CODING_AGENT_DIR !== undefined) {
+		env.PI_CODING_AGENT_DIR = auditEnv.PI_CODING_AGENT_DIR;
 	}
 
 	const result = Bun.spawnSync(["bash", AUDIT_SCRIPT, fixture.repo], {
@@ -1138,3 +1148,64 @@ test("inaccessible explicit XDG omp ancestor is fail-closed / never safe", () =>
 		chmodSync(xdgDataHome, 0o700);
 	}
 });
+
+test("default profile with custom PI_CODING_AGENT_DIR never scans inactive XDG sessions", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const xdgSessions = join(xdgDataHome, "omp", "sessions");
+	// Custom override — not the profile-derived default ($HOME/.omp/agent).
+	const customAgentDir = join(fixture.root, "custom-agent");
+	const profileDerivedDefault = join(fixture.home, ".omp", "agent");
+
+	mkdirSync(join(customAgentDir, "sessions"), { recursive: true });
+	installOmpConfigPathStub(fixture.bin, customAgentDir);
+
+	// Matching recent chat lives only under inactive default XDG root.
+	// DirResolver: additional XDG roots require (linux||darwin) && isDefault.
+	// Custom PI_CODING_AGENT_DIR ⇒ isDefault=false ⇒ scan only custom sessions.
+	writeSessionTranscript(xdgSessions, fixture.worktree, {
+		id: "inactive-xdg-under-custom-agent",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		PI_CODING_AGENT_DIR: customAgentDir,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	// Independent source of truth: active agent_dir ≠ profile-derived default.
+	expect(customAgentDir).not.toBe(profileDerivedDefault);
+	// No cross-root leakage / false recent hold from inactive XDG.
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
+	expect(row.bucket).not.toBe("verify-recent-chat");
+});
+
+test("Windows ignores XDG sessions even for default agent_dir", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const xdgSessions = join(xdgDataHome, "omp", "sessions");
+	const agentDir = join(fixture.home, ".omp", "agent");
+
+	installOmpConfigPathStub(fixture.bin, agentDir);
+	writeSessionTranscript(xdgSessions, fixture.worktree, {
+		id: "windows-xdg-ignored",
+	});
+
+	// DirResolver: on Windows (win32) ignore XDG entirely, even when isDefault.
+	writeExecutable(
+		join(fixture.bin, "uname"),
+		"#!/bin/sh\necho 'MINGW64_NT-10.0'\nexit 0\n",
+	);
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
+	expect(row.bucket).not.toBe("verify-recent-chat");
+});
+
