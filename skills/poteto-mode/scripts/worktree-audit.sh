@@ -11,6 +11,37 @@ repo="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 [ -z "$repo" ] && { echo "not in a git repo; pass a repo path" >&2; exit 1; }
 cd "$repo" || exit 1
 
+# Lexically normalize an agent-directory path like Node's path.resolve().
+# Do not resolve symlinks: DirResolver's isDefault check compares normalized
+# path spellings, not filesystem identities.
+normalize_path() {
+	local input=$1 segment result depth
+	local -a parts normalized
+	parts=()
+	normalized=()
+
+	case "$input" in
+		/*) ;;
+		*) input="$(pwd -P)/$input" ;;
+	esac
+	IFS=/ read -r -a parts <<< "$input"
+	for segment in "${parts[@]}"; do
+		case "$segment" in
+			""|.) ;;
+			..)
+				depth=${#normalized[@]}
+				[ "$depth" -gt 0 ] && unset 'normalized[depth-1]'
+				;;
+			*) normalized[${#normalized[@]}]=$segment ;;
+		esac
+	done
+	result=
+	for segment in "${normalized[@]}"; do
+		result="$result/$segment"
+	done
+	printf '%s\n' "${result:-/}"
+}
+
 # Main worktree is the first entry. Strip the porcelain record prefix rather
 # than splitting on whitespace because worktree paths may contain spaces.
 main_wt=$(git worktree list --porcelain \
@@ -132,16 +163,23 @@ session_discovery_failed=no
 session_roots=("$agent_dir/sessions")
 
 # DirResolver consults XDG only on Linux/macOS and only while the active agent
-# directory is the profile-derived default. A custom PI_CODING_AGENT_DIR and
-# unsupported platforms keep all session state under the active agent directory.
-config_dir_name=${PI_CONFIG_DIR:-.omp}
-if [ -n "$active_profile" ]; then
-	profile_default_agent="$HOME/$config_dir_name/profiles/$active_profile/agent"
+# directory is the profile-derived default. Named profiles ignore an inherited
+# PI_CODING_AGENT_DIR, and default mode without an override is semantically
+# default regardless of equivalent HOME/PI_CONFIG_DIR path spellings.
+is_default_agent=no
+if [ -n "$active_profile" ] \
+	|| [ "${PI_CODING_AGENT_DIR+x}" != x ] \
+	|| [ -z "$PI_CODING_AGENT_DIR" ]; then
+	is_default_agent=yes
 else
-	profile_default_agent="$HOME/$config_dir_name/agent"
+	config_dir_name=${PI_CONFIG_DIR:-.omp}
+	profile_default_agent=$(normalize_path "$HOME/$config_dir_name/agent")
+	normalized_agent_dir=$(normalize_path "$agent_dir")
+	[ "$normalized_agent_dir" = "$profile_default_agent" ] && is_default_agent=yes
 fi
+
 xdg_applicable=no
-if [ "$agent_dir" = "$profile_default_agent" ] \
+if [ "$is_default_agent" = yes ] \
 	&& [ "${XDG_DATA_HOME+x}" = x ] \
 	&& [ -n "$XDG_DATA_HOME" ]; then
 	if platform_name=$(uname -s 2>/dev/null); then
