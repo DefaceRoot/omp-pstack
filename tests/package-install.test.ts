@@ -4,11 +4,12 @@ import { join } from "node:path";
 
 /**
  * Public seams:
- * - package.json metadata (name, private, omp.extensions, files, pstackPort, scripts)
+ * - package.json metadata (name, version, private, omp.extensions, files, pstackPort, scripts)
  * - README install/removal/verification documentation
  * - root licensing notices for Lauren Tan and Cursor
  *
- * Independent source of truth: orchestrator assignment + Main install/metadata pins.
+ * Independent source of truth: orchestrator assignment + Main install/metadata pins +
+ * PackageSliceReview follow-up findings.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -16,9 +17,11 @@ const PACKAGE_JSON_PATH = join(ROOT, "package.json");
 const README_PATH = join(ROOT, "README.md");
 
 const PACKAGE_NAME = "@defaceroot/omp-pstack";
+const PACKAGE_VERSION = "0.1.0";
 const EXTENSION_ENTRY = "./src/extension.ts";
 const UPSTREAM_COMMIT = "6f7e183aa9f48805c38746705fe6a17d42cafb94";
 const UPSTREAM_VERSION = "0.14.0";
+const GENERATED_MODEL_RULE = "~/.omp/agent/rules/pstack-models.md";
 
 const REQUIRED_PUBLISH_PATHS = [
 	"src",
@@ -31,16 +34,25 @@ const REQUIRED_PUBLISH_PATHS = [
 	"README.md",
 ] as const;
 
-const LIFECYCLE_SCRIPT_KEYS = ["preinstall", "install", "postinstall"] as const;
-
-const OUTSIDE_PACKAGE_WRITE_MARKERS = [
-	"~/",
-	"$HOME",
-	"${HOME}",
-	"/home/",
-	"~/.omp",
-	"/tmp/",
-	"../",
+/** npm lifecycle hooks — none are needed for this package. Do not scan command strings. */
+const NPM_LIFECYCLE_HOOKS = [
+	"preinstall",
+	"install",
+	"postinstall",
+	"preprepare",
+	"prepare",
+	"prepublish",
+	"prepublishOnly",
+	"prepack",
+	"postpack",
+	"publish",
+	"postpublish",
+	"preuninstall",
+	"uninstall",
+	"postuninstall",
+	"preversion",
+	"version",
+	"postversion",
 ] as const;
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
@@ -48,6 +60,7 @@ const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
 
 type PackageJson = {
 	name?: unknown;
+	version?: unknown;
 	private?: unknown;
 	scripts?: Record<string, unknown>;
 	files?: unknown;
@@ -68,15 +81,8 @@ function readReadme(): string {
 	return readFileSync(README_PATH, "utf8");
 }
 
-function filesEntryCovers(files: string[], required: string): boolean {
-	return files.some((entry) => {
-		const normalized = entry.replace(/^\.\//, "").replace(/\/$/, "");
-		return (
-			normalized === required ||
-			required.startsWith(`${normalized}/`) ||
-			normalized.startsWith(`${required}/`)
-		);
-	});
+function normalizeFilesEntry(entry: string): string {
+	return entry.replace(/^\.\//, "").replace(/\/$/, "");
 }
 
 function collectLicenseTexts(): Array<{ path: string; text: string }> {
@@ -101,39 +107,43 @@ function collectLicenseTexts(): Array<{ path: string; text: string }> {
 	return out;
 }
 
-test("package metadata and README document a removable git-installable omp-pstack extension", () => {
+test("package.json names an installable omp-pstack extension with pinned metadata", () => {
 	const pkg = readPackageJson();
 
 	expect(pkg.name).toBe(PACKAGE_NAME);
+	expect(pkg.version).toBe(PACKAGE_VERSION);
 	expect(pkg.private).toBe(false);
 	expect(pkg.omp?.extensions).toEqual([EXTENSION_ENTRY]);
+
+	const extensionPath = join(ROOT, normalizeFilesEntry(EXTENSION_ENTRY));
+	expect(existsSync(extensionPath)).toBe(true);
+	expect(statSync(extensionPath).isFile()).toBe(true);
 
 	expect(pkg.pstackPort?.upstreamVersion).toBe(UPSTREAM_VERSION);
 	expect(pkg.pstackPort?.upstreamCommit).toBe(UPSTREAM_COMMIT);
 
 	expect(Array.isArray(pkg.files)).toBe(true);
-	const files = (pkg.files as unknown[]).filter(
-		(entry): entry is string => typeof entry === "string",
-	);
+	const files = (pkg.files as unknown[])
+		.filter((entry): entry is string => typeof entry === "string")
+		.map(normalizeFilesEntry);
 	expect(files.length).toBeGreaterThan(0);
+
+	// Each required path must appear as itself in files[] — a child entry must not satisfy a parent.
 	const missingPublishPaths = REQUIRED_PUBLISH_PATHS.filter(
-		(path) => !filesEntryCovers(files, path),
+		(path) => !files.includes(path),
 	);
 	expect(missingPublishPaths).toEqual([]);
 
 	const scripts = pkg.scripts ?? {};
-	for (const key of LIFECYCLE_SCRIPT_KEYS) {
-		const body = scripts[key];
-		if (typeof body !== "string") {
-			expect(body).toBeUndefined();
-			continue;
-		}
-		for (const marker of OUTSIDE_PACKAGE_WRITE_MARKERS) {
-			expect(body.includes(marker)).toBe(false);
-		}
-	}
+	const presentLifecycleHooks = NPM_LIFECYCLE_HOOKS.filter((key) =>
+		Object.hasOwn(scripts, key),
+	);
+	expect(presentLifecycleHooks).toEqual([]);
+});
 
+test("README documents exact remote/local install, disable, cleanup, uninstall, and verification commands", () => {
 	const readme = readReadme();
+
 	expect(readme).toContain("omp install github:DefaceRoot/omp-pstack");
 	expect(
 		readme.includes("omp install ./omp-pstack") || readme.includes("omp install ."),
@@ -142,18 +152,77 @@ test("package metadata and README document a removable git-installable omp-pstac
 	expect(readme).toContain("/pstack-cleanup");
 	expect(readme).toContain("omp plugin uninstall @defaceroot/omp-pstack");
 	expect(readme).toContain("omp plugin list --json");
-	expect(readme).toContain("/pstack-status");
 	expect(readme).toContain(PACKAGE_NAME);
+});
+
+test("README documents a representative P-Stack trial plus team-kit slash examples with purposes", () => {
+	const readme = readReadme();
+
+	expect(readme).toContain("/setup-pstack");
+	expect(readme).toContain("/poteto-mode");
+	expect(readme).toContain("/pstack-status");
+	expect(readme).toContain("/pstack-off");
+
+	expect(readme).toContain("/deslop");
+	expect(readme).toMatch(/\/deslop\b[\s\S]{0,240}(slop|clean up|cleanup|code style)/i);
+	expect(readme).toContain("/control-cli");
+	expect(readme).toMatch(
+		/\/control-cli\b[\s\S]{0,280}(CLI|TUI|terminal|harness|interactive)/i,
+	);
+	expect(readme).toContain("/control-ui");
+	expect(readme).toMatch(
+		/\/control-ui\b[\s\S]{0,280}(UI|browser|CDP|screenshot|accessibility|Electron)/i,
+	);
+});
+
+test("README polarity-binds cleanup to the generated model rule and preserves user artifacts", () => {
+	const readme = readReadme();
+	const escapedRule = GENERATED_MODEL_RULE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+	expect(readme).toMatch(/plugin-owned|package-owned|shipped by the plugin/i);
+	expect(readme).toMatch(/user-generated|user-created|user-owned/i);
+	expect(readme).toContain(GENERATED_MODEL_RULE);
+	expect(readme).toMatch(/\bskills\/\b/);
+
+	// Confirmed cleanup deletes only the generated rule (markdown backticks allowed around the path).
+	expect(readme).toMatch(
+		new RegExp(
+			`/pstack-cleanup[\\s\\S]{0,500}deletes only \\\`?${escapedRule}\\\`?`,
+			"i",
+		),
+	);
+	expect(readme).toMatch(/declin\w+[\s\S]{0,160}(leaves|leave|retain|unchanged)/i);
+	expect(readme).toMatch(
+		/uninstall\w*[\s\S]{0,500}(does not (remove|delete)|leaves?|remain)[\s\S]{0,200}(user-generated|user-created|user-owned)/i,
+	);
+	expect(readme).toMatch(
+		/(uninstall|\/pstack-cleanup)[\s\S]{0,500}(does not (remove|delete)|leaves?|remain)[\s\S]{0,200}(local checkout|checkout|working tree)/i,
+	);
+});
+
+test("README distinguishes remote managed uninstall from local-link uninstall", () => {
+	const readme = readReadme();
+
+	// Remote/managed uninstall removes the managed copy.
+	expect(readme).toMatch(
+		/(managed copy|remote (install|managed)|github install)[\s\S]{0,400}(uninstall|remove)[\s\S]{0,240}(managed copy|installed copy|package copy)/i,
+	);
+	// Local-link uninstall removes registration/link but preserves the user checkout.
+	expect(readme).toMatch(
+		/(local(-|\s)?link|local checkout)[\s\S]{0,400}(uninstall|remove)[\s\S]{0,300}(registration|link)/i,
+	);
+	expect(readme).toMatch(
+		/(local(-|\s)?link|local checkout)[\s\S]{0,500}(preserv\w+|does not (delete|remove)|leaves?)[\s\S]{0,160}(checkout|working tree|repository)/i,
+	);
+});
+
+test("README links canonical upstream sources and root licensing retains separate Lauren Tan and Cursor notices", () => {
+	const readme = readReadme();
 
 	expect(readme).toContain("https://github.com/cursor/plugins/tree/main/pstack");
 	expect(readme).toContain(
 		"https://github.com/cursor/plugins/tree/main/cursor-team-kit",
 	);
-
-	expect(readme).toMatch(/plugin-owned|package-owned|shipped by the plugin/i);
-	expect(readme).toMatch(/user-generated|user-created|user-owned/i);
-	expect(readme).toContain("~/.omp/agent/rules/pstack-models.md");
-	expect(readme).toMatch(/\bskills\/\b/);
 
 	const notices = collectLicenseTexts();
 	expect(notices.length).toBeGreaterThan(0);
