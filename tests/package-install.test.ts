@@ -9,7 +9,7 @@ import { join } from "node:path";
  * - root licensing notices for Lauren Tan and Cursor
  *
  * Independent source of truth: orchestrator assignment + Main install/metadata pins +
- * PackageSliceReview follow-up findings.
+ * PackageDocsReview follow-up findings.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -34,26 +34,43 @@ const REQUIRED_PUBLISH_PATHS = [
 	"README.md",
 ] as const;
 
-/** npm lifecycle hooks — none are needed for this package. Do not scan command strings. */
+/**
+ * Complete npm lifecycle hook set. This package needs none.
+ * Assert key absence only — do not scan command-string bodies.
+ */
 const NPM_LIFECYCLE_HOOKS = [
 	"preinstall",
 	"install",
 	"postinstall",
 	"preprepare",
 	"prepare",
+	"postprepare",
 	"prepublish",
 	"prepublishOnly",
-	"prepack",
-	"postpack",
 	"publish",
 	"postpublish",
-	"preuninstall",
-	"uninstall",
-	"postuninstall",
+	"prepack",
+	"pack",
+	"postpack",
 	"preversion",
 	"version",
 	"postversion",
+	"preuninstall",
+	"uninstall",
+	"postuninstall",
+	"predependencies",
+	"dependencies",
+	"postdependencies",
 ] as const;
+
+const PSTACK_TRIAL_COMMANDS = [
+	"/setup-pstack",
+	"/poteto-mode",
+	"/pstack-status",
+	"/pstack-off",
+] as const;
+
+const TEAM_KIT_COMMANDS = ["/deslop", "/control-cli", "/control-ui"] as const;
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
@@ -83,6 +100,36 @@ function readReadme(): string {
 
 function normalizeFilesEntry(entry: string): string {
 	return entry.replace(/^\.\//, "").replace(/\/$/, "");
+}
+
+function extractFencedBlocks(markdown: string): string[] {
+	const blocks: string[] = [];
+	const re = /```[^\n]*\n([\s\S]*?)```/g;
+	for (const match of markdown.matchAll(re)) {
+		blocks.push(match[1] ?? "");
+	}
+	return blocks;
+}
+
+/** Non-empty trimmed lines from all fenced code/example blocks. */
+function fencedExampleLines(markdown: string): string[] {
+	return extractFencedBlocks(markdown)
+		.flatMap((block) => block.split("\n"))
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+}
+
+/** Period/exclamation sentences inside blank-line paragraphs (semicolons stay in-clause). */
+function uninstallSentences(text: string): string[] {
+	return text
+		.split(/\n{2,}/)
+		.flatMap((paragraph) =>
+			paragraph
+				.replace(/\n+/g, " ")
+				.split(/(?<=[.!])\s+/)
+				.map((part) => part.trim())
+				.filter((part) => part.length > 0 && /uninstall/i.test(part)),
+		);
 }
 
 function collectLicenseTexts(): Array<{ path: string; text: string }> {
@@ -143,36 +190,38 @@ test("package.json names an installable omp-pstack extension with pinned metadat
 
 test("README documents exact remote/local install, disable, cleanup, uninstall, and verification commands", () => {
 	const readme = readReadme();
+	const lines = fencedExampleLines(readme);
 
-	expect(readme).toContain("omp install github:DefaceRoot/omp-pstack");
+	expect(lines).toContain("omp install github:DefaceRoot/omp-pstack");
 	expect(
-		readme.includes("omp install ./omp-pstack") || readme.includes("omp install ."),
+		lines.includes("omp install ./omp-pstack") || lines.includes("omp install ."),
 	).toBe(true);
-	expect(readme).toContain("omp plugin disable @defaceroot/omp-pstack");
+	expect(lines).toContain("omp plugin disable @defaceroot/omp-pstack");
 	expect(readme).toContain("/pstack-cleanup");
-	expect(readme).toContain("omp plugin uninstall @defaceroot/omp-pstack");
-	expect(readme).toContain("omp plugin list --json");
+	expect(lines).toContain("omp plugin uninstall @defaceroot/omp-pstack");
+	expect(lines).toContain("omp plugin list --json");
 	expect(readme).toContain(PACKAGE_NAME);
 });
 
-test("README documents a representative P-Stack trial plus team-kit slash examples with purposes", () => {
+test("README fences a runnable P-Stack trial and team-kit slash examples with nonempty task input", () => {
 	const readme = readReadme();
+	const lines = fencedExampleLines(readme);
 
-	expect(readme).toContain("/setup-pstack");
-	expect(readme).toContain("/poteto-mode");
-	expect(readme).toContain("/pstack-status");
-	expect(readme).toContain("/pstack-off");
+	// Representative P-Stack trial must appear as runnable fenced lines, not prose token mentions.
+	for (const command of PSTACK_TRIAL_COMMANDS) {
+		expect(lines).toContain(command);
+	}
 
-	expect(readme).toContain("/deslop");
-	expect(readme).toMatch(/\/deslop\b[\s\S]{0,240}(slop|clean up|cleanup|code style)/i);
-	expect(readme).toContain("/control-cli");
-	expect(readme).toMatch(
-		/\/control-cli\b[\s\S]{0,280}(CLI|TUI|terminal|harness|interactive)/i,
-	);
-	expect(readme).toContain("/control-ui");
-	expect(readme).toMatch(
-		/\/control-ui\b[\s\S]{0,280}(UI|browser|CDP|screenshot|accessibility|Electron)/i,
-	);
+	// Each team-kit slash example must be a fenced line with a concrete nonempty task/input.
+	for (const command of TEAM_KIT_COMMANDS) {
+		const runnable = lines.find((line) => {
+			if (!line.startsWith(`${command} `) && line !== command) return false;
+			const task = line.slice(command.length).trim();
+			return task.length > 0;
+		});
+		expect(runnable).toBeDefined();
+		expect(runnable!.slice(command.length).trim().length).toBeGreaterThan(0);
+	}
 });
 
 test("README polarity-binds cleanup to the generated model rule and preserves user artifacts", () => {
@@ -200,20 +249,39 @@ test("README polarity-binds cleanup to the generated model rule and preserves us
 	);
 });
 
-test("README distinguishes remote managed uninstall from local-link uninstall", () => {
+test("README pins remote managed-copy removal and local-checkout non-deletion in bounded uninstall sentences", () => {
 	const readme = readReadme();
+	const bounded = uninstallSentences(readme);
+	expect(bounded.length).toBeGreaterThan(0);
 
-	// Remote/managed uninstall removes the managed copy.
-	expect(readme).toMatch(
-		/(managed copy|remote (install|managed)|github install)[\s\S]{0,400}(uninstall|remove)[\s\S]{0,240}(managed copy|installed copy|package copy)/i,
+	// Affirmative remote managed-copy removal must live in its own uninstall sentence.
+	const remoteManagedRemoval = bounded.find(
+		(sentence) =>
+			/(GitHub remote|remote install|managed)/i.test(sentence) &&
+			/\b(removes|deletes)\b/i.test(sentence) &&
+			/(managed (installed )?copy|installed copy)/i.test(sentence),
 	);
-	// Local-link uninstall removes registration/link but preserves the user checkout.
-	expect(readme).toMatch(
-		/(local(-|\s)?link|local checkout)[\s\S]{0,400}(uninstall|remove)[\s\S]{0,300}(registration|link)/i,
+	expect(remoteManagedRemoval).toBeDefined();
+
+	// Explicit negative local-checkout deletion must live in its own uninstall sentence.
+	const localCheckoutPreserved = bounded.find(
+		(sentence) =>
+			/(local(-|\s)?link|local checkout)/i.test(sentence) &&
+			/(never deletes|does not delete|does not remove|never removes)/i.test(
+				sentence,
+			) &&
+			/(checkout|working tree)/i.test(sentence),
 	);
-	expect(readme).toMatch(
-		/(local(-|\s)?link|local checkout)[\s\S]{0,500}(preserv\w+|does not (delete|remove)|leaves?)[\s\S]{0,160}(checkout|working tree|repository)/i,
+	expect(localCheckoutPreserved).toBeDefined();
+
+	// Local-link uninstall also removes only registration/link within a bounded uninstall sentence.
+	const localLinkRegistration = bounded.find(
+		(sentence) =>
+			/(local(-|\s)?link|local checkout)/i.test(sentence) &&
+			/\b(removes|remove)\b/i.test(sentence) &&
+			/(registration|link)/i.test(sentence),
 	);
+	expect(localLinkRegistration).toBeDefined();
 });
 
 test("README links canonical upstream sources and root licensing retains separate Lauren Tan and Cursor notices", () => {
