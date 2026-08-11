@@ -23,6 +23,9 @@ import { join } from "node:path";
  * - skills/reflect/references/judgment-reviewer.md
  * - skills/reflect/references/tooling-reviewer.md
  *
+ * Public seam (automate-me update-mode edit start):
+ * - skills/automate-me/SKILL.md
+ *
  * Independent source of truth: OMP profile-aware resource layout.
  * Prefer an explicit current session / `history://` (or `agent://`) path.
  * Filesystem fallback resolves active `agent_dir` via `omp config path`,
@@ -42,7 +45,13 @@ import { join } from "node:path";
  * `~/.omp/plugins/node_modules/`; plugin skill evidence uses actual /
  * `skill://` paths recorded in the transcript, or resolves the active
  * `plugins_directory` via `omp plugin doctor` (profile/XDG-aware), never
- * a default-only plugins root. Assert every known consumer in one focused
+ * a default-only plugins root. automate-me update mode uses Git history
+ * only when the selected skill is tracked in the current project
+ * repository; for user-authored / otherwise untracked active-profile
+ * skills under `<agent_dir>/skills`, use a portable file mtime as the
+ * edit start point, and stop/report if neither timestamp is readable.
+ * An unconditional `git log -1 --format=%cI <path>` breaks the newly
+ * supported user-skill path. Assert every known consumer in one focused
  * suite so a single stale default-path caller fails RED.
  */
 
@@ -91,6 +100,8 @@ const REFLECT_REVIEWER_PLUGIN_CONSUMERS = [
 	"skills/reflect/references/judgment-reviewer.md",
 	"skills/reflect/references/tooling-reviewer.md",
 ] as const;
+
+const AUTOMATE_ME = "skills/automate-me/SKILL.md";
 
 /** Hardcoded default-profile session root — forbidden as an active location. */
 const HARDCODED_DEFAULT_SESSIONS = "~/.omp/agent/sessions";
@@ -169,6 +180,31 @@ const PLUGIN_EVIDENCE_FROM_TRANSCRIPT =
  */
 const PLUGIN_DIR_VIA_OMP_PLUGIN_DOCTOR =
 	/(?:omp plugin doctor[\s\S]{0,220}plugins_directory|plugins_directory[\s\S]{0,220}omp plugin doctor)/i;
+
+/**
+ * Unconditional Git committer-date edit start — forbidden. Breaks
+ * user-authored / untracked active-profile skills under <agent_dir>/skills.
+ */
+const UNCONDITIONAL_GIT_LOG_EDIT_START =
+	/git log -1 --format=%cI <path>|`git log -1 --format=%cI <path>`/;
+
+/**
+ * Git history is valid only when the selected skill is tracked in the
+ * current project repository.
+ */
+const GIT_HISTORY_ONLY_WHEN_TRACKED =
+	/(?:git(?:\s+log|\s+history)|%cI)[\s\S]{0,160}(?:tracked|in\s+(?:the\s+)?(?:current\s+)?(?:project\s+)?(?:git\s+)?(?:repo|repository))|(?:tracked|in\s+(?:the\s+)?(?:current\s+)?(?:project\s+)?(?:git\s+)?(?:repo|repository))[\s\S]{0,160}(?:git(?:\s+log|\s+history)|%cI|committer)/i;
+
+/**
+ * Portable filesystem mtime for user-authored / untracked skills under
+ * the active <agent_dir>/skills root.
+ */
+const PORTABLE_MTIME_FOR_USER_SKILLS =
+	/(?:(?:portable\s+)?(?:file\s+)?mtime|modification\s+time)[\s\S]{0,200}(?:\$\{?agent_dir\}?|<agent_dir>|\bagent_dir\b)\s*\/\s*skills|(?:\$\{?agent_dir\}?|<agent_dir>|\bagent_dir\b)\s*\/\s*skills[\s\S]{0,200}(?:(?:portable\s+)?(?:file\s+)?mtime|modification\s+time)|(?:user-authored|untracked)[\s\S]{0,200}(?:(?:portable\s+)?(?:file\s+)?mtime|modification\s+time)/i;
+
+/** Stop / report when neither Git nor mtime timestamp is readable. */
+const STOP_IF_NEITHER_TIMESTAMP_READABLE =
+	/(?:stop|abort|halt|report|fail|refuse)[\s\S]{0,160}(?:neither|no\s+(?:readable\s+)?timestamp|both\s+(?:timestamps?\s+)?(?:unreadable|missing|unavailable)|(?:mtime|git)[\s\S]{0,80}(?:and|nor)[\s\S]{0,80}(?:mtime|git))|(?:neither|no\s+(?:readable\s+)?timestamp|both\s+(?:timestamps?\s+)?(?:unreadable|missing|unavailable))[\s\S]{0,160}(?:stop|abort|halt|report|fail|refuse)/i;
 
 function readConsumer(relativePath: string): string {
 	const absolute = join(ROOT, relativePath);
@@ -353,6 +389,37 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 					`${relativePath}: plugin skill evidence must use actual/skill:// paths recorded in the transcript, or resolve active plugins_directory via \`omp plugin doctor\` (profile/XDG-aware), never a default-only plugins root`,
 				);
 			}
+		}
+
+		expect(violations).toEqual([]);
+	});
+
+	test("automate-me update mode uses Git history only for project-tracked skills, portable mtime for untracked <agent_dir>/skills, and stops when neither timestamp is readable", () => {
+		const violations: string[] = [];
+		const body = readConsumer(AUTOMATE_ME);
+
+		if (UNCONDITIONAL_GIT_LOG_EDIT_START.test(body)) {
+			violations.push(
+				`${AUTOMATE_ME}: still uses unconditional \`git log -1 --format=%cI <path>\`; that breaks user-authored / untracked active-profile skills under <agent_dir>/skills`,
+			);
+		}
+
+		if (!GIT_HISTORY_ONLY_WHEN_TRACKED.test(body)) {
+			violations.push(
+				`${AUTOMATE_ME}: update mode must use Git history only when the selected skill is tracked in the current project repository`,
+			);
+		}
+
+		if (!PORTABLE_MTIME_FOR_USER_SKILLS.test(body)) {
+			violations.push(
+				`${AUTOMATE_ME}: for user-authored / otherwise untracked active-profile skills under <agent_dir>/skills, update mode must use a portable file mtime as the edit start point`,
+			);
+		}
+
+		if (!STOP_IF_NEITHER_TIMESTAMP_READABLE.test(body)) {
+			violations.push(
+				`${AUTOMATE_ME}: update mode must stop/report if neither Git nor mtime timestamp is readable`,
+			);
 		}
 
 		expect(violations).toEqual([]);
