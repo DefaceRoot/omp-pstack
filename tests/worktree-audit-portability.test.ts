@@ -39,7 +39,11 @@
  *     ignored `.env`) must not be reported clean/safe — plain git status
  *     misses `!!`, so the audit must surface ignored contents (at least
  *     mark/count them), keep the exact worktree path, and fail closed /
- *     needs-review.
+ *     needs-review;
+ *     a merged candidate with no open PR and no recent matching transcript
+ *     but exactly one untracked (scratch) file must keep dirty=scratch:N and
+ *     still never bucket as safe — hold/review only (scratch counts are
+ *     inspect signals per the cleanup playbook, never prune permission).
  *
  * No network, GitHub, or real user state. Fixtures never inspect real sessions.
  */
@@ -803,3 +807,34 @@ test("ignored-only user files (e.g. .env) are not reported clean/safe", () => {
 	expect(["review", "hold-wip"]).toContain(row.bucket);
 });
 
+test("scratch-only untracked file stays scratch but never safe", () => {
+	// Merged, no open PR (gh stub → []), no matching transcript written.
+	const fixture = createFixture({ merged: true });
+
+	// Independent source of truth: exactly one untracked file. Not ignored,
+	// not tracked — today's dirty=scratch:1 fallthrough still buckets safe
+	// when merged/recent=no, which would prune inspect-signal scratch.
+	writeFileSync(
+		join(fixture.worktree, "notes.txt"),
+		"scratch-only local notes\n",
+		"utf8",
+	);
+
+	const plainStatus = Bun.spawnSync(
+		["git", "-C", fixture.worktree, "status", "--porcelain"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	expect(plainStatus.exitCode).toBe(0);
+	expect(plainStatus.stdout.toString().trim()).toBe("?? notes.txt");
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	expect(row.worktree).toBe(fixture.worktree);
+	// Dirty classification remains scratch/untracked (not clean, not wip).
+	expect(row.dirty).toBe("scratch:1");
+	// Non-safe hold/review: never the prune-safe bucket.
+	expect(row.bucket).not.toBe("safe");
+	expect(["review", "hold-wip"]).toContain(row.bucket);
+});
