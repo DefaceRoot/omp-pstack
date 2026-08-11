@@ -18,6 +18,11 @@ import { join } from "node:path";
  * - skills/reflect/references/judgment-reviewer.md
  * - skills/reflect/references/tooling-reviewer.md
  *
+ * Public seams (reflect reviewer plugin-evidence consumers):
+ * - skills/reflect/references/divergent-reviewer.md
+ * - skills/reflect/references/judgment-reviewer.md
+ * - skills/reflect/references/tooling-reviewer.md
+ *
  * Independent source of truth: OMP profile-aware resource layout.
  * Prefer an explicit current session / `history://` (or `agent://`) path.
  * Filesystem fallback resolves active `agent_dir` via `omp config path`,
@@ -33,9 +38,12 @@ import { join } from "node:path";
  * `XDG_DATA_HOME` is unset.
  * User-authored skill discovery/write/evidence uses `<agent_dir>/skills`
  * resolved the same way — never `~/.omp/agent/skills`. Project
- * `.omp/skills` and global plugin-installed paths remain valid where
- * relevant. Assert every known consumer in one focused suite so a single
- * stale default-path caller fails RED.
+ * `.omp/skills` remains valid. Reflect reviewers must not hardcode
+ * `~/.omp/plugins/node_modules/`; plugin skill evidence uses actual /
+ * `skill://` paths recorded in the transcript, or resolves the active
+ * `plugins_directory` via `omp plugin doctor` (profile/XDG-aware), never
+ * a default-only plugins root. Assert every known consumer in one focused
+ * suite so a single stale default-path caller fails RED.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -53,43 +61,45 @@ type UserSkillConsumer = {
 	path: string;
 	/** Project-local authored skills remain valid. */
 	requiresProjectSkills: boolean;
-	/** Global plugin-installed skill paths remain valid for evidence scans. */
-	requiresPluginSkills: boolean;
 };
 
 const USER_SKILL_CONSUMERS: readonly UserSkillConsumer[] = [
 	{
 		path: "skills/automate-me/SKILL.md",
 		requiresProjectSkills: true,
-		requiresPluginSkills: false,
 	},
 	{
 		path: "skills/poteto-mode/playbooks/authoring-a-skill.md",
 		requiresProjectSkills: true,
-		requiresPluginSkills: false,
 	},
 	{
 		path: "skills/reflect/references/divergent-reviewer.md",
 		requiresProjectSkills: true,
-		requiresPluginSkills: true,
 	},
 	{
 		path: "skills/reflect/references/judgment-reviewer.md",
 		requiresProjectSkills: true,
-		requiresPluginSkills: true,
 	},
 	{
 		path: "skills/reflect/references/tooling-reviewer.md",
 		requiresProjectSkills: true,
-		requiresPluginSkills: true,
 	},
 ];
+
+const REFLECT_REVIEWER_PLUGIN_CONSUMERS = [
+	"skills/reflect/references/divergent-reviewer.md",
+	"skills/reflect/references/judgment-reviewer.md",
+	"skills/reflect/references/tooling-reviewer.md",
+] as const;
 
 /** Hardcoded default-profile session root — forbidden as an active location. */
 const HARDCODED_DEFAULT_SESSIONS = "~/.omp/agent/sessions";
 
 /** Hardcoded default-profile user-skills root — forbidden. */
 const HARDCODED_DEFAULT_SKILLS = "~/.omp/agent/skills";
+
+/** Hardcoded default-profile plugin skills root — forbidden. */
+const HARDCODED_DEFAULT_PLUGINS = "~/.omp/plugins/node_modules";
 
 /**
  * Default-profile XDG sessions root (`$XDG_DATA_HOME/omp/sessions`). Required
@@ -146,14 +156,31 @@ const AGENT_DIR_SKILLS =
 /** Project-local skill root remains valid. */
 const PROJECT_SKILLS = /\.omp\/skills/;
 
-/** Global plugin-installed skill evidence paths remain valid. */
-const PLUGIN_INSTALLED_SKILLS =
-	/~\/\.omp\/plugins(?:\/node_modules)?|\.omp\/plugins\/node_modules/i;
+/**
+ * Plugin skill evidence from paths / `skill://` references actually recorded
+ * in the transcript (not an invented default plugins root).
+ */
+const PLUGIN_EVIDENCE_FROM_TRANSCRIPT =
+	/(?:actual|recorded)[\s\S]{0,120}(?:skill:\/\/|plugin[\s\S]{0,40}path)|(?:skill:\/\/|plugin[\s\S]{0,40}path)[\s\S]{0,120}(?:actual|recorded)|(?:path|skill:\/\/)[\s\S]{0,100}recorded\s+in\s+(?:the\s+)?transcript|transcript[\s\S]{0,100}(?:skill:\/\/|plugin[\s\S]{0,40}path)/i;
+
+/**
+ * Active plugins directory from `omp plugin doctor`'s `plugins_directory`
+ * check — profile/XDG-aware, never a hardcoded default-only root.
+ */
+const PLUGIN_DIR_VIA_OMP_PLUGIN_DOCTOR =
+	/(?:omp plugin doctor[\s\S]{0,220}plugins_directory|plugins_directory[\s\S]{0,220}omp plugin doctor)/i;
 
 function readConsumer(relativePath: string): string {
 	const absolute = join(ROOT, relativePath);
 	expect(existsSync(absolute)).toBe(true);
 	return readFileSync(absolute, "utf8");
+}
+
+function resolvesPluginEvidenceWithoutDefaultOnly(body: string): boolean {
+	return (
+		PLUGIN_EVIDENCE_FROM_TRANSCRIPT.test(body) ||
+		PLUGIN_DIR_VIA_OMP_PLUGIN_DOCTOR.test(body)
+	);
 }
 
 describe("profile-aware transcript and user-skill consumer contracts", () => {
@@ -257,7 +284,7 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 		expect(violations).toEqual([]);
 	});
 
-	test("every user-skill consumer resolves <agent_dir>/skills via omp config path, forbids ~/.omp/agent/skills, and keeps project/plugin roots where relevant", () => {
+	test("every user-skill consumer resolves <agent_dir>/skills via omp config path, forbids ~/.omp/agent/skills, and keeps project .omp/skills where relevant", () => {
 		const violations: string[] = [];
 
 		for (const consumer of USER_SKILL_CONSUMERS) {
@@ -286,13 +313,44 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 					`${consumer.path}: project .omp/skills must remain a valid skill root`,
 				);
 			}
+		}
 
-			if (
-				consumer.requiresPluginSkills &&
-				!PLUGIN_INSTALLED_SKILLS.test(body)
-			) {
+		expect(violations).toEqual([]);
+	});
+
+	test("every reflect reviewer forbids hardcoded ~/.omp/plugins/node_modules/, resolves plugin evidence via transcript skill:// paths or omp plugin doctor plugins_directory, and preserves project + <agent_dir>/skills", () => {
+		const violations: string[] = [];
+
+		for (const relativePath of REFLECT_REVIEWER_PLUGIN_CONSUMERS) {
+			const body = readConsumer(relativePath);
+
+			if (body.includes(HARDCODED_DEFAULT_PLUGINS)) {
 				violations.push(
-					`${consumer.path}: global plugin-installed skill paths must remain valid evidence roots`,
+					`${relativePath}: still mentions fixed ${HARDCODED_DEFAULT_PLUGINS}/`,
+				);
+			}
+
+			if (!PROJECT_SKILLS.test(body)) {
+				violations.push(
+					`${relativePath}: project .omp/skills must remain a valid skill evidence root`,
+				);
+			}
+
+			if (!AGENT_DIR_SKILLS.test(body)) {
+				violations.push(
+					`${relativePath}: active <agent_dir>/skills must remain a valid skill evidence root`,
+				);
+			}
+
+			if (!AGENT_DIR_VIA_OMP_CONFIG_PATH.test(body)) {
+				violations.push(
+					`${relativePath}: must resolve active agent_dir via \`omp config path\` for user-authored skills`,
+				);
+			}
+
+			if (!resolvesPluginEvidenceWithoutDefaultOnly(body)) {
+				violations.push(
+					`${relativePath}: plugin skill evidence must use actual/skill:// paths recorded in the transcript, or resolve active plugins_directory via \`omp plugin doctor\` (profile/XDG-aware), never a default-only plugins root`,
 				);
 			}
 		}
