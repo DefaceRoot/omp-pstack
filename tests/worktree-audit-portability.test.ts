@@ -46,7 +46,12 @@
  *     current profile regardless of path spelling (HOME trailing slash,
  *     PI_CONFIG_DIR lexical segments like ./.omp) — textual `$HOME/...`
  *     vs normalized `omp config path` must not skip an applicable XDG root;
- *     only the override-present case needs normalized path comparison;
+ *     only the override-present case needs normalized path comparison, and
+ *     only for the default profile; for a named active profile OMP ignores
+ *     PI_CODING_AGENT_DIR, so isDefault is unconditionally true even when the
+ *     parent shell still carries that env var — scan named-profile XDG
+ *     sessions; never apply override normalization/comparison under a named
+ *     profile;
  *     a valid sessions-root symlink to a directory that holds a matching recent
  *     .jsonl must still be discovered (verify-recent-chat / not-safe), not skipped
  *     by plain find -P traversal of the symlink root;
@@ -1247,6 +1252,49 @@ test("HOME trailing slash keeps isDefault true for applicable XDG sessions", () 
 
 	// Today's textual `$HOME/$PI_CONFIG_DIR/agent` vs normalized omp config path
 	// falsely skips XDG and can mark a recent-session worktree safe.
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+	expect(row.bucket).not.toBe("safe");
+});
+
+test("named profile ignores leftover PI_CODING_AGENT_DIR and still scans XDG", () => {
+	const fixture = createFixture({ merged: true });
+	const profile = "auditprof";
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const namedSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		profile,
+		"sessions",
+	);
+	const namedAgentDir = join(fixture.home, ".omp", "profiles", profile, "agent");
+	// Leftover parent-shell override — OMP ignores this under a named profile.
+	const leftoverCustomAgent = join(fixture.root, "leftover-custom-agent");
+	const homeWithTrailingSlash = `${fixture.home}/`;
+
+	mkdirSync(join(leftoverCustomAgent, "sessions"), { recursive: true });
+	mkdirSync(join(xdgDataHome, "omp", "profiles", profile), { recursive: true });
+	// omp config path returns the named profile agent (override ignored).
+	installOmpConfigPathStub(fixture.bin, namedAgentDir);
+
+	writeSessionTranscript(namedSessions, fixture.worktree, {
+		id: "named-xdg-with-leftover-override",
+	});
+
+	const result = runAudit(fixture, {
+		HOME: homeWithTrailingSlash,
+		OMP_PROFILE: profile,
+		PI_CODING_AGENT_DIR: leftoverCustomAgent,
+		XDG_DATA_HOME: xdgDataHome,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	// Independent source of truth (DirResolver): named profile ⇒ override ignored
+	// ⇒ isDefault unconditionally true. Path-spelling comparison against
+	// `$HOME/.../profiles/<p>/agent` must not skip named XDG sessions.
+	expect(leftoverCustomAgent).not.toBe(namedAgentDir);
 	expect(row.bucket).toBe("verify-recent-chat");
 	expect(row.lastChat).toMatch(DATE_RE);
 	expect(row.bucket).not.toBe("safe");
