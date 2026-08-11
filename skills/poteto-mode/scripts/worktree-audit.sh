@@ -30,16 +30,45 @@ else
 fi
 
 # Materialize transcript discovery so find's exit status is not hidden by
-# process substitution. A partial/failed traversal is unsafe: it may omit the
-# only transcript matching a candidate worktree.
+# process substitution. Only JSONL files are session transcripts; parsing
+# unrelated artifacts would turn harmless clutter into an unsafe parse error.
+# A partial/failed traversal is unsafe because it may omit the only transcript
+# matching a candidate worktree.
 session_candidates=$(mktemp) || {
 	rm -f "$prs"
 	echo "could not create transcript candidate list" >&2
 	exit 1
 }
 session_discovery_failed=no
-if [ -d "$transcripts" ] && ! find "$transcripts" -type f -print0 > "$session_candidates"; then
+if [ -d "$transcripts" ]; then
+	if ! find "$transcripts" -type f -name '*.jsonl' -print0 > "$session_candidates"; then
+		session_discovery_failed=yes
+	fi
+elif [ -e "$transcripts" ] || [ -L "$transcripts" ]; then
+	# Existing non-directories and dangling links are not an empty session store.
 	session_discovery_failed=yes
+else
+	# Confirm absence through the nearest existing ancestor. A failed stat below
+	# an unsearchable ancestor is indistinguishable from absence unless the
+	# ancestor's search permission is checked explicitly.
+	probe=$transcripts
+	while :; do
+		parent=${probe%/*}
+		[ "$parent" = "$probe" ] && {
+			session_discovery_failed=yes
+			break
+		}
+		[ -z "$parent" ] && parent=/
+		if [ -d "$parent" ]; then
+			[ -x "$parent" ] || session_discovery_failed=yes
+			break
+		fi
+		if [ -e "$parent" ] || [ -L "$parent" ]; then
+			session_discovery_failed=yes
+			break
+		fi
+		probe=$parent
+	done
 fi
 now=$(date +%s 2>/dev/null || echo 0)
 case "$now" in ''|*[!0-9]*) now=0 ;; esac
