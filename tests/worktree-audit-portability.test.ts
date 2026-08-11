@@ -34,7 +34,12 @@
  *     size sorting must work without GNU sort -h (BSD/macOS) while retaining
  *     descending size order;
  *     missing/unauthenticated/nonzero gh pr list must not become [] → safe
- *     (nonzero exit, or PR unknown / non-safe).
+ *     (nonzero exit, or PR unknown / non-safe);
+ *     a worktree whose only local contents are ignored user files (e.g. an
+ *     ignored `.env`) must not be reported clean/safe — plain git status
+ *     misses `!!`, so the audit must surface ignored contents (at least
+ *     mark/count them), keep the exact worktree path, and fail closed /
+ *     needs-review.
  *
  * No network, GitHub, or real user state. Fixtures never inspect real sessions.
  */
@@ -62,6 +67,7 @@ const FAIL_CLOSED_BUCKETS = new Set(["verify-recent-chat", "unknown"]);
 
 type AuditRow = {
 	size: string;
+	dirty: string;
 	pr: string;
 	lastChat: string;
 	bucket: string;
@@ -375,6 +381,7 @@ function runAudit(fixture: Fixture, auditEnv: AuditEnv = {}): AuditResult {
 			const cols = line.split("\t");
 			return {
 				size: cols[0] ?? "",
+				dirty: cols[3] ?? "",
 				pr: cols[5] ?? "",
 				lastChat: cols[6] ?? "",
 				bucket: cols[7] ?? "",
@@ -751,3 +758,48 @@ test("recent session cwd with sibling-prefix path does not prevent safe", () => 
 	expect(row.bucket).toBe("safe");
 	expect(row.lastChat).toBe("-");
 });
+
+test("ignored-only user files (e.g. .env) are not reported clean/safe", () => {
+	const fixture = createFixture({ merged: true });
+
+	// Independent source of truth: ignored user file only. Use info/exclude so
+	// the worktree stays merge-ancestor-clean; plain `git status --porcelain`
+	// still omits `!!`, so today dirty=clean → safe and risks data loss.
+	writeFileSync(join(fixture.repo, ".git", "info", "exclude"), ".env\n", "utf8");
+	writeFileSync(
+		join(fixture.worktree, ".env"),
+		"SECRET_TOKEN=do-not-delete\n",
+		"utf8",
+	);
+
+	// Confirm the fixture really is ignored-only from git's default view.
+	const plainStatus = Bun.spawnSync(
+		["git", "-C", fixture.worktree, "status", "--porcelain"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	expect(plainStatus.exitCode).toBe(0);
+	expect(plainStatus.stdout.toString().trim()).toBe("");
+	const ignoredStatus = Bun.spawnSync(
+		["git", "-C", fixture.worktree, "status", "--porcelain", "--ignored"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	expect(ignoredStatus.exitCode).toBe(0);
+	expect(ignoredStatus.stdout.toString()).toMatch(/!!.*\.env/);
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	// Exact path retained so guidance can inspect paths/size before prune.
+	expect(row.worktree).toBe(fixture.worktree);
+	expect(row.size.length).toBeGreaterThan(0);
+
+	// Surface ignored contents at least as a mark/count; never "clean".
+	expect(row.dirty).not.toBe("clean");
+	expect(row.dirty).toMatch(/ignored:\d+/);
+
+	// Fail closed / needs-review: must not be the prune-safe bucket.
+	expect(row.bucket).not.toBe("safe");
+	expect(["review", "hold-wip"]).toContain(row.bucket);
+});
+
