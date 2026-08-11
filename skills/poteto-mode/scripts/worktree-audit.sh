@@ -30,10 +30,10 @@ else
 fi
 
 # Materialize transcript discovery so find's exit status is not hidden by
-# process substitution. Only JSONL files are session transcripts; parsing
-# unrelated artifacts would turn harmless clutter into an unsafe parse error.
-# A partial/failed traversal is unsafe because it may omit the only transcript
-# matching a candidate worktree.
+# process substitution. Follow a command-line sessions-root symlink explicitly,
+# but not symlinks discovered beneath it; -H has these semantics on both GNU
+# and BSD find. Only JSONL files are session transcripts, and a partial/failed
+# traversal is unsafe because it may omit the only matching transcript.
 session_candidates=$(mktemp) || {
 	rm -f "$prs"
 	echo "could not create transcript candidate list" >&2
@@ -41,7 +41,7 @@ session_candidates=$(mktemp) || {
 }
 session_discovery_failed=no
 if [ -d "$transcripts" ]; then
-	if ! find "$transcripts" -type f -name '*.jsonl' -print0 > "$session_candidates"; then
+	if ! find -H "$transcripts" -type f -name '*.jsonl' -print0 > "$session_candidates"; then
 		session_discovery_failed=yes
 	fi
 elif [ -e "$transcripts" ] || [ -L "$transcripts" ]; then
