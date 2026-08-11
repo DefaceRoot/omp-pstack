@@ -1,0 +1,238 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Public seams (transcript consumers):
+ * - skills/automate-me/SKILL.md
+ * - skills/recall/SKILL.md
+ * - skills/reflect/SKILL.md
+ * - skills/show-me-your-work/SKILL.md
+ * - skills/poteto-mode/playbooks/eval.md
+ * - skills/poteto-mode/playbooks/session-pickup.md
+ *
+ * Public seams (user-skill consumers):
+ * - skills/automate-me/SKILL.md
+ * - skills/poteto-mode/playbooks/authoring-a-skill.md
+ * - skills/reflect/references/divergent-reviewer.md
+ * - skills/reflect/references/judgment-reviewer.md
+ * - skills/reflect/references/tooling-reviewer.md
+ *
+ * Independent source of truth: OMP profile-aware resource layout.
+ * Prefer an explicit current session / `history://` (or `agent://`) path.
+ * Filesystem fallback resolves active `agent_dir` via `omp config path`,
+ * considers the profile-matched XDG data sessions root
+ * `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` when applicable, and
+ * never reads default-profile sessions (`~/.omp/agent/sessions` or
+ * `$XDG_DATA_HOME/omp/sessions`) under a named profile.
+ * User-authored skill discovery/write/evidence uses `<agent_dir>/skills`
+ * resolved the same way — never `~/.omp/agent/skills`. Project
+ * `.omp/skills` and global plugin-installed paths remain valid where
+ * relevant. Assert every known consumer in one focused suite so a single
+ * stale default-path caller fails RED.
+ */
+
+const ROOT = join(import.meta.dir, "..");
+
+const TRANSCRIPT_CONSUMERS = [
+	"skills/automate-me/SKILL.md",
+	"skills/recall/SKILL.md",
+	"skills/reflect/SKILL.md",
+	"skills/show-me-your-work/SKILL.md",
+	"skills/poteto-mode/playbooks/eval.md",
+	"skills/poteto-mode/playbooks/session-pickup.md",
+] as const;
+
+type UserSkillConsumer = {
+	path: string;
+	/** Project-local authored skills remain valid. */
+	requiresProjectSkills: boolean;
+	/** Global plugin-installed skill paths remain valid for evidence scans. */
+	requiresPluginSkills: boolean;
+};
+
+const USER_SKILL_CONSUMERS: readonly UserSkillConsumer[] = [
+	{
+		path: "skills/automate-me/SKILL.md",
+		requiresProjectSkills: true,
+		requiresPluginSkills: false,
+	},
+	{
+		path: "skills/poteto-mode/playbooks/authoring-a-skill.md",
+		requiresProjectSkills: true,
+		requiresPluginSkills: false,
+	},
+	{
+		path: "skills/reflect/references/divergent-reviewer.md",
+		requiresProjectSkills: true,
+		requiresPluginSkills: true,
+	},
+	{
+		path: "skills/reflect/references/judgment-reviewer.md",
+		requiresProjectSkills: true,
+		requiresPluginSkills: true,
+	},
+	{
+		path: "skills/reflect/references/tooling-reviewer.md",
+		requiresProjectSkills: true,
+		requiresPluginSkills: true,
+	},
+];
+
+/** Hardcoded default-profile session root — forbidden as an active location. */
+const HARDCODED_DEFAULT_SESSIONS = "~/.omp/agent/sessions";
+
+/** Hardcoded default-profile user-skills root — forbidden. */
+const HARDCODED_DEFAULT_SKILLS = "~/.omp/agent/skills";
+
+/**
+ * Default-profile XDG sessions root without a profile segment. Mentions of
+ * `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` are the profile-matched
+ * form and are allowed / required separately. Trailing `/` is still stale.
+ */
+const DEFAULT_PROFILE_XDG_SESSIONS = /\$XDG_DATA_HOME\/omp\/sessions\b/g;
+
+/** Prefer an explicit current session / history / agent handoff path. */
+const PREFER_EXPLICIT_SESSION_OR_HISTORY =
+	/(?:current\s+(?:OMP\s+)?session\s+path|explicit\s+OMP\s+transcript\s+path|history:\/\/|agent:\/\/)/i;
+
+/**
+ * Filesystem fallback resolves active agent_dir from `omp config path`
+ * rather than assuming ~/.omp/agent.
+ */
+const AGENT_DIR_VIA_OMP_CONFIG_PATH =
+	/(?:omp config path[\s\S]{0,220}\bagent_dir\b|\bagent_dir\b[\s\S]{0,220}omp config path)/i;
+
+/** Sessions discovered under the derived agent_dir. */
+const AGENT_DIR_SESSIONS =
+	/(?:\$\{?agent_dir\}?|<agent_dir>|\bagent_dir\b)\s*\/\s*sessions/i;
+
+/**
+ * Profile-matched XDG data sessions root when applicable
+ * (`$XDG_DATA_HOME/omp/profiles/<profile>/sessions`).
+ */
+const PROFILE_MATCHED_XDG_SESSIONS =
+	/(?:\$XDG_DATA_HOME|XDG_DATA_HOME)[\s\S]{0,40}omp\/profiles\/(?:<profile>|<name>|\$\{?profile\}?|\{profile\})\/sessions|omp\/profiles\/(?:<profile>|<name>|\$\{?profile\}?|\{profile\}|[^/\s]+)\/sessions/i;
+
+/** Named-profile scans must not inherit default-profile session roots. */
+const NO_DEFAULT_PROFILE_SESSION_LEAK =
+	/(?:never|do\s+not|don't|without)[\s\S]{0,120}(?:default-profile|default\s+profile)[\s\S]{0,80}sessions|(?:default-profile|default\s+profile)[\s\S]{0,80}sessions[\s\S]{0,120}(?:never|do\s+not|don't|leak|under\s+a\s+named)/i;
+
+/** User-authored skills under the derived agent_dir. */
+const AGENT_DIR_SKILLS =
+	/(?:\$\{?agent_dir\}?|<agent_dir>|\bagent_dir\b)\s*\/\s*skills/i;
+
+/** Project-local skill root remains valid. */
+const PROJECT_SKILLS = /\.omp\/skills/;
+
+/** Global plugin-installed skill evidence paths remain valid. */
+const PLUGIN_INSTALLED_SKILLS =
+	/~\/\.omp\/plugins(?:\/node_modules)?|\.omp\/plugins\/node_modules/i;
+
+function readConsumer(relativePath: string): string {
+	const absolute = join(ROOT, relativePath);
+	expect(existsSync(absolute)).toBe(true);
+	return readFileSync(absolute, "utf8");
+}
+
+function defaultProfileXdgSessionMentions(body: string): string[] {
+	return [...body.matchAll(DEFAULT_PROFILE_XDG_SESSIONS)].map((m) => m[0]);
+}
+
+describe("profile-aware transcript and user-skill consumer contracts", () => {
+	test("every transcript consumer prefers explicit session/history paths, resolves filesystem fallback via omp config path + profile-matched XDG, and forbids default-profile session roots", () => {
+		const violations: string[] = [];
+
+		for (const relativePath of TRANSCRIPT_CONSUMERS) {
+			const body = readConsumer(relativePath);
+
+			if (body.includes(HARDCODED_DEFAULT_SESSIONS)) {
+				violations.push(
+					`${relativePath}: still mentions ${HARDCODED_DEFAULT_SESSIONS}`,
+				);
+			}
+
+			const defaultXdg = defaultProfileXdgSessionMentions(body);
+			if (defaultXdg.length > 0) {
+				violations.push(
+					`${relativePath}: still mentions default-profile XDG sessions root (${defaultXdg.join(", ")}); use profile-matched omp/profiles/<profile>/sessions when applicable`,
+				);
+			}
+
+			if (!PREFER_EXPLICIT_SESSION_OR_HISTORY.test(body)) {
+				violations.push(
+					`${relativePath}: must prefer an explicit current session path, history://, or agent:// handoff before filesystem discovery`,
+				);
+			}
+
+			if (!AGENT_DIR_VIA_OMP_CONFIG_PATH.test(body)) {
+				violations.push(
+					`${relativePath}: filesystem fallback must resolve active agent_dir via \`omp config path\``,
+				);
+			}
+
+			if (!AGENT_DIR_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: filesystem fallback must search <agent_dir>/sessions`,
+				);
+			}
+
+			if (!PROFILE_MATCHED_XDG_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: must consider profile-matched XDG data sessions root \`$XDG_DATA_HOME/omp/profiles/<profile>/sessions\` when applicable`,
+				);
+			}
+
+			if (!NO_DEFAULT_PROFILE_SESSION_LEAK.test(body)) {
+				violations.push(
+					`${relativePath}: must say named-profile discovery never reads default-profile sessions`,
+				);
+			}
+		}
+
+		expect(violations).toEqual([]);
+	});
+
+	test("every user-skill consumer resolves <agent_dir>/skills via omp config path, forbids ~/.omp/agent/skills, and keeps project/plugin roots where relevant", () => {
+		const violations: string[] = [];
+
+		for (const consumer of USER_SKILL_CONSUMERS) {
+			const body = readConsumer(consumer.path);
+
+			if (body.includes(HARDCODED_DEFAULT_SKILLS)) {
+				violations.push(
+					`${consumer.path}: still mentions ${HARDCODED_DEFAULT_SKILLS}`,
+				);
+			}
+
+			if (!AGENT_DIR_VIA_OMP_CONFIG_PATH.test(body)) {
+				violations.push(
+					`${consumer.path}: user-authored skills must resolve active agent_dir via \`omp config path\``,
+				);
+			}
+
+			if (!AGENT_DIR_SKILLS.test(body)) {
+				violations.push(
+					`${consumer.path}: user-authored skill discovery/write/evidence must use <agent_dir>/skills`,
+				);
+			}
+
+			if (consumer.requiresProjectSkills && !PROJECT_SKILLS.test(body)) {
+				violations.push(
+					`${consumer.path}: project .omp/skills must remain a valid skill root`,
+				);
+			}
+
+			if (
+				consumer.requiresPluginSkills &&
+				!PLUGIN_INSTALLED_SKILLS.test(body)
+			) {
+				violations.push(
+					`${consumer.path}: global plugin-installed skill paths must remain valid evidence roots`,
+				);
+			}
+		}
+
+		expect(violations).toEqual([]);
+	});
+});
