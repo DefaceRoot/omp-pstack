@@ -28,7 +28,42 @@ if [ -n "${XDG_DATA_HOME:-}" ]; then
 else
 	transcripts="$HOME/.omp/agent/sessions"
 fi
-now=$(date +%s)
+now=$(date +%s 2>/dev/null || echo 0)
+case "$now" in ''|*[!0-9]*) now=0 ;; esac
+
+# GNU and BSD/macOS spell mtime reads and epoch formatting differently.
+# Detect the available forms once instead of assuming the host OS.
+if stat -c '%Y' -- "$repo" >/dev/null 2>&1; then
+	stat_style=gnu
+elif stat -f '%m' "$repo" >/dev/null 2>&1; then
+	stat_style=bsd
+else
+	stat_style=unknown
+fi
+
+if date -d '@0' '+%Y-%m-%d' >/dev/null 2>&1; then
+	date_style=gnu
+elif date -r 0 '+%Y-%m-%d' >/dev/null 2>&1; then
+	date_style=bsd
+else
+	date_style=unknown
+fi
+
+file_mtime() {
+	case "$stat_style" in
+		gnu) stat -c '%Y' -- "$1" ;;
+		bsd) stat -f '%m' "$1" ;;
+		*) return 1 ;;
+	esac
+}
+
+format_epoch_day() {
+	case "$date_style" in
+		gnu) date -d "@$1" '+%Y-%m-%d' ;;
+		bsd) date -r "$1" '+%Y-%m-%d' ;;
+		*) return 1 ;;
+	esac
+}
 
 printf "SIZE\tAGE\tMERGED\tDIRTY\tREMOTE\tPR\tLAST_CHAT\tBUCKET\tWORKTREE\n"
 
@@ -63,20 +98,48 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 		'.[] | select(.headRefName==$b) | "#\(.number)/\(.state)"' "$prs" 2>/dev/null | head -1)
 	[ -z "$pr" ] && pr="-"
 
-	# Most recent chat whose transcript operated in this worktree. Match path
-	# followed by "/" or a quote so glint-482 does not match glint-482-r37.
-	last="-"; last_ts=0
+	# Most recent chat whose first-line session header names this worktree.
+	# Parse only the header and compare cwd exactly so sibling paths and later
+	# transcript content do not match.
+	last="-"; last_ts=0; transcript_match=no; timestamp_failed=no
 	if [ -d "$transcripts" ]; then
-		f=$(rg -l -e "${wt}/" -e "${wt}\"" "$transcripts" 2>/dev/null \
-			| xargs stat -f '%m %N' 2>/dev/null | sort -rn | head -1)
-		if [ -n "$f" ]; then last_ts=$(echo "$f" | awk '{print $1}')
-			last=$(date -r "$last_ts" '+%Y-%m-%d' 2>/dev/null); fi
+		while IFS= read -r -d '' candidate; do
+			header=""
+			IFS= read -r header < "$candidate" || [ -n "$header" ] || continue
+			header_cwd=$(printf '%s\n' "$header" \
+				| jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null)
+			[ "$header_cwd" = "$wt" ] || continue
+			transcript_match=yes
+
+			if candidate_ts=$(file_mtime "$candidate" 2>/dev/null); then
+				case "$candidate_ts" in
+					''|*[!0-9]*) timestamp_failed=yes ;;
+					*) [ "$candidate_ts" -gt "$last_ts" ] && last_ts=$candidate_ts ;;
+				esac
+			else
+				timestamp_failed=yes
+			fi
+		done < <(find "$transcripts" -type f -print0 2>/dev/null)
 	fi
-	recent=$([ "$last_ts" -gt 0 ] 2>/dev/null && [ $(( (now - last_ts) / 86400 )) -le 4 ] && echo yes || echo no)
+
+	if [ "$last_ts" -gt 0 ]; then
+		if ! last=$(format_epoch_day "$last_ts" 2>/dev/null) || [ -z "$last" ]; then
+			last="-"
+			timestamp_failed=yes
+		fi
+	fi
+
+	if [ "$transcript_match" = yes ] && { [ "$timestamp_failed" = yes ] || [ "$now" -le 0 ]; }; then
+		recent=unknown
+	elif [ "$last_ts" -gt 0 ] && [ $(( (now - last_ts) / 86400 )) -le 4 ]; then
+		recent=yes
+	else
+		recent=no
+	fi
 
 	case "$dirty" in wip:*) bucket=hold-wip ;; *)
 		case "$pr" in *OPEN*) bucket=hold-open-pr ;; *)
-			if [ "$recent" = yes ]; then bucket=verify-recent-chat
+			if [ "$recent" != no ]; then bucket=verify-recent-chat
 			elif [ "$merged" = YES ] || [ "$pr" != "-" ]; then bucket=safe
 			else bucket=review; fi ;;
 		esac ;;
