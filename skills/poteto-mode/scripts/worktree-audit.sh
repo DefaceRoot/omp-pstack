@@ -28,6 +28,19 @@ if [ -n "${XDG_DATA_HOME:-}" ]; then
 else
 	transcripts="$HOME/.omp/agent/sessions"
 fi
+
+# Materialize transcript discovery so find's exit status is not hidden by
+# process substitution. A partial/failed traversal is unsafe: it may omit the
+# only transcript matching a candidate worktree.
+session_candidates=$(mktemp) || {
+	rm -f "$prs"
+	echo "could not create transcript candidate list" >&2
+	exit 1
+}
+session_discovery_failed=no
+if [ -d "$transcripts" ] && ! find "$transcripts" -type f -print0 > "$session_candidates"; then
+	session_discovery_failed=yes
+fi
 now=$(date +%s 2>/dev/null || echo 0)
 case "$now" in ''|*[!0-9]*) now=0 ;; esac
 
@@ -102,25 +115,35 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 	# Parse only the header and compare cwd exactly so sibling paths and later
 	# transcript content do not match.
 	last="-"; last_ts=0; transcript_match=no; timestamp_failed=no
-	if [ -d "$transcripts" ]; then
-		while IFS= read -r -d '' candidate; do
-			header=""
-			IFS= read -r header < "$candidate" || [ -n "$header" ] || continue
-			header_cwd=$(printf '%s\n' "$header" \
-				| jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null)
-			[ "$header_cwd" = "$wt" ] || continue
-			transcript_match=yes
+	transcript_scan_failed=$session_discovery_failed
+	while IFS= read -r -d '' candidate; do
+		header=""
+		IFS= read -r header < "$candidate"
+		header_status=$?
+		if [ "$header_status" -ne 0 ] && [ -z "$header" ]; then
+			transcript_scan_failed=yes
+			continue
+		fi
 
-			if candidate_ts=$(file_mtime "$candidate" 2>/dev/null); then
-				case "$candidate_ts" in
-					''|*[!0-9]*) timestamp_failed=yes ;;
-					*) [ "$candidate_ts" -gt "$last_ts" ] && last_ts=$candidate_ts ;;
-				esac
-			else
-				timestamp_failed=yes
-			fi
-		done < <(find "$transcripts" -type f -print0 2>/dev/null)
-	fi
+		# Check jq in this shell. An unparseable header could belong to this
+		# worktree, so treating it as a non-match would fail open.
+		if ! header_cwd=$(printf '%s\n' "$header" \
+			| jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null); then
+			transcript_scan_failed=yes
+			continue
+		fi
+		[ "$header_cwd" = "$wt" ] || continue
+		transcript_match=yes
+
+		if candidate_ts=$(file_mtime "$candidate" 2>/dev/null); then
+			case "$candidate_ts" in
+				''|*[!0-9]*) timestamp_failed=yes ;;
+				*) [ "$candidate_ts" -gt "$last_ts" ] && last_ts=$candidate_ts ;;
+			esac
+		else
+			timestamp_failed=yes
+		fi
+	done < "$session_candidates"
 
 	if [ "$last_ts" -gt 0 ]; then
 		if ! last=$(format_epoch_day "$last_ts" 2>/dev/null) || [ -z "$last" ]; then
@@ -129,7 +152,9 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 		fi
 	fi
 
-	if [ "$transcript_match" = yes ] && { [ "$timestamp_failed" = yes ] || [ "$now" -le 0 ]; }; then
+	if [ "$transcript_scan_failed" = yes ]; then
+		recent=unknown
+	elif [ "$transcript_match" = yes ] && { [ "$timestamp_failed" = yes ] || [ "$now" -le 0 ]; }; then
 		recent=unknown
 	elif [ "$last_ts" -gt 0 ] && [ $(( (now - last_ts) / 86400 )) -le 4 ]; then
 		recent=yes
@@ -149,4 +174,4 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 		"$size" "$age" "$merged" "$dirty" "$remote" "$pr" "$last" "$bucket" "$wt"
 done | sort -t$'\t' -k1,1 -rh
 
-rm -f "$prs"
+rm -f "$prs" "$session_candidates"
