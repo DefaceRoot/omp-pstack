@@ -573,7 +573,9 @@ export class GhGitHubReader implements T.GitHubReader {
       page.endCursor,
       "contexts.pageInfo.endCursor"
     );
-    return { checks, endCursor: page.hasNextPage && cursor ? cursor : null };
+    if (page.hasNextPage && !cursor)
+      missing("contexts.pageInfo.endCursor", cursor);
+    return { checks, endCursor: page.hasNextPage ? cursor : null };
   }
   async reviewThreads(
     context: T.PrContext
@@ -642,9 +644,15 @@ export async function resolveChecks(
   const direct = fast.kind === "checks" ? nonEmpty(fast.checks) : null;
   if (direct !== null) return { source: "gh-pr-checks", checks: direct };
   const checks: T.Check[] = [];
+  const cursors = new Set<string>();
   let after: string | null = null;
   do {
     const page = await reader.checkRollupPage(context, after);
+    if (page.endCursor !== null) {
+      if (cursors.has(page.endCursor))
+        missing("contexts.pageInfo.endCursor", page.endCursor);
+      cursors.add(page.endCursor);
+    }
     checks.push(...page.checks);
     after = page.endCursor;
   } while (after !== null);
