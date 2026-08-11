@@ -18,7 +18,13 @@
  *     non-directory or inaccessible/unsearchable sessions path must fail closed;
  *     a valid sessions-root symlink to a directory that holds a matching recent
  *     .jsonl must still be discovered (verify-recent-chat / not-safe), not skipped
- *     by plain find -P traversal of the symlink root.
+ *     by plain find -P traversal of the symlink root;
+ *     git worktree porcelain paths containing spaces must be parsed as the full
+ *     path (not awk $2 / truncated) and classified;
+ *     size sorting must work without GNU sort -h (BSD/macOS) while retaining
+ *     descending size order;
+ *     missing/unauthenticated/nonzero gh pr list must not become [] → safe
+ *     (nonzero exit, or PR unknown / non-safe).
  *
  * No network, GitHub, or real user state.
  */
@@ -37,6 +43,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const FAIL_CLOSED_BUCKETS = new Set(["verify-recent-chat", "unknown"]);
 
 type AuditRow = {
+	size: string;
+	pr: string;
 	lastChat: string;
 	bucket: string;
 	worktree: string;
@@ -89,13 +97,16 @@ function writeExecutable(path: string, body: string): void {
 	chmodSync(path, 0o755);
 }
 
-function createFixture(options: { merged: boolean }): Fixture {
+function createFixture(options: {
+	merged: boolean;
+	worktreeDirName?: string;
+}): Fixture {
 	const root = mkdtempSync(join(tmpdir(), "worktree-audit-portability-"));
 	fixtures.push(root);
 
 	const home = join(root, "home");
 	const repo = join(root, "repo");
-	const worktree = join(root, "wt-candidate");
+	const worktree = join(root, options.worktreeDirName ?? "wt-candidate");
 	const bin = join(root, "bin");
 	mkdirSync(home, { recursive: true });
 	mkdirSync(repo, { recursive: true });
@@ -131,6 +142,84 @@ function createFixture(options: { merged: boolean }): Fixture {
 	return { root, home, repo, worktree, bin };
 }
 
+/** Two sized candidates for portable descending-size sort assertions. */
+function createSizedCandidatesFixture(): Fixture & {
+	largeWorktree: string;
+	smallWorktree: string;
+} {
+	const root = mkdtempSync(join(tmpdir(), "worktree-audit-portability-"));
+	fixtures.push(root);
+
+	const home = join(root, "home");
+	const repo = join(root, "repo");
+	const largeWorktree = join(root, "wt-large");
+	const smallWorktree = join(root, "wt-small");
+	const bin = join(root, "bin");
+	mkdirSync(home, { recursive: true });
+	mkdirSync(repo, { recursive: true });
+	mkdirSync(bin, { recursive: true });
+
+	writeExecutable(join(bin, "gh"), "#!/bin/sh\necho '[]'\nexit 0\n");
+
+	const gitEnv = {
+		...process.env,
+		HOME: home,
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_CONFIG_SYSTEM: "/dev/null",
+		PATH: `${bin}:${process.env.PATH ?? ""}`,
+	};
+
+	sh("git init -q", repo, gitEnv);
+	sh("git config user.email portability@example.com", repo, gitEnv);
+	sh("git config user.name Portability", repo, gitEnv);
+	writeFileSync(join(repo, "README"), "base\n", "utf8");
+	sh("git add README && git commit -qm init && git branch -M main", repo, gitEnv);
+	sh(`git worktree add -q -b large "${largeWorktree}" HEAD`, repo, gitEnv);
+	sh(`git worktree add -q -b small "${smallWorktree}" HEAD`, repo, gitEnv);
+	sh(
+		`git update-ref refs/remotes/origin/main "$(git rev-parse HEAD)"`,
+		repo,
+		gitEnv,
+	);
+
+	// Independent size signal for du(1): large blob vs tiny file (untracked is fine).
+	writeFileSync(join(largeWorktree, "blob.bin"), "L".repeat(2 * 1024 * 1024), "utf8");
+	writeFileSync(join(smallWorktree, "tiny.txt"), "s\n", "utf8");
+
+	return {
+		root,
+		home,
+		repo,
+		worktree: largeWorktree,
+		bin,
+		largeWorktree,
+		smallWorktree,
+	};
+}
+
+/** Reject GNU-only sort -h / -rh the way BSD/macOS sort does. */
+function installBsdSortStub(bin: string): void {
+	writeExecutable(
+		join(bin, "sort"),
+		`#!/bin/sh
+for arg in "$@"; do
+	case "$arg" in
+		-h|--human-numeric-sort)
+			echo "sort: invalid option -- h" >&2
+			exit 2
+			;;
+		-*[!0-9kKtTbBnRrmu]*h*|-*h*)
+			# Combined flags such as -rh / -hr (GNU human-numeric).
+			echo "sort: invalid option -- h" >&2
+			exit 2
+			;;
+	esac
+done
+exec /usr/bin/sort "$@"
+`,
+	);
+}
+
 function writeMatchingTranscript(home: string, cwd: string): string {
 	const sessionDir = join(
 		home,
@@ -155,7 +244,6 @@ function writeMatchingTranscript(home: string, cwd: string): string {
 	return transcript;
 }
 
-
 function writeNonTranscriptSessionArtifacts(home: string): void {
 	const sessions = join(home, ".omp", "agent", "sessions");
 	mkdirSync(join(sessions, "notes-dir"), { recursive: true });
@@ -165,7 +253,6 @@ function writeNonTranscriptSessionArtifacts(home: string): void {
 	writeFileSync(join(sessions, "readme.md"), "# not a transcript\n", "utf8");
 	writeFileSync(join(sessions, "notes-dir", "scratch.txt"), "still noise\n", "utf8");
 }
-
 
 function writeMatchingTranscriptViaSessionsSymlink(
 	home: string,
@@ -232,6 +319,8 @@ function runAudit(fixture: Fixture): AuditResult {
 		.map((line) => {
 			const cols = line.split("\t");
 			return {
+				size: cols[0] ?? "",
+				pr: cols[5] ?? "",
 				lastChat: cols[6] ?? "",
 				bucket: cols[7] ?? "",
 				worktree: cols[8] ?? "",
@@ -363,4 +452,61 @@ test("sessions-root symlink with matching recent transcript is verify-recent-cha
 	const row = rowFor(result.rows, fixture.worktree);
 	expect(row.bucket).toBe("verify-recent-chat");
 	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("worktree porcelain paths with spaces are parsed and classified in full", () => {
+	const fixture = createFixture({
+		merged: true,
+		worktreeDirName: "wt candidate spaced",
+	});
+	expect(fixture.worktree.includes(" ")).toBe(true);
+
+	// awk '{print $2}' truncates at the first space, so the full porcelain path
+	// never appears as WORKTREE and cannot be classified.
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.worktree).toBe(fixture.worktree);
+	expect(row.bucket).toBe("safe");
+});
+
+test("size sort works without GNU sort -h and keeps descending order", () => {
+	const fixture = createSizedCandidatesFixture();
+	installBsdSortStub(fixture.bin);
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+
+	const large = rowFor(result.rows, fixture.largeWorktree);
+	const small = rowFor(result.rows, fixture.smallWorktree);
+	expect(result.rows.map((r) => r.worktree)).toEqual([
+		fixture.largeWorktree,
+		fixture.smallWorktree,
+	]);
+	// Human SIZE labels may differ by du(1); relative order is the contract.
+	expect(large.size.length).toBeGreaterThan(0);
+	expect(small.size.length).toBeGreaterThan(0);
+});
+
+test("nonzero gh pr list is fail-closed / not fabricated [] → safe", () => {
+	const fixture = createFixture({ merged: true });
+
+	// Unauthenticated / nonzero gh. Current script replaces failure with [] and
+	// a merged worktree then buckets safe — that is fail-open.
+	writeExecutable(
+		join(fixture.bin, "gh"),
+		"#!/bin/sh\necho 'gh: To get started with GitHub CLI, please run: gh auth login' >&2\nexit 1\n",
+	);
+
+	const result = runAudit(fixture);
+	if (result.exitCode !== 0) {
+		expect(result.exitCode).not.toBe(0);
+		return;
+	}
+
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).not.toBe("safe");
+	// If the script continues, PR must be explicitly unknown/non-empty-safe — not
+	// the fabricated "-" that comes from rewriting a failed gh call as [].
+	expect(row.pr).not.toBe("-");
 });
