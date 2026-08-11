@@ -42,6 +42,11 @@
  *     PI_CODING_AGENT_DIR, scan only <custom-agent_dir>/sessions and never
  *     inactive $XDG_DATA_HOME/omp/sessions (no cross-root transcript leakage /
  *     false recent hold); on Windows (win32) ignore XDG entirely;
+ *     without an agent-dir override, isDefault is semantically true for the
+ *     current profile regardless of path spelling (HOME trailing slash,
+ *     PI_CONFIG_DIR lexical segments like ./.omp) — textual `$HOME/...`
+ *     vs normalized `omp config path` must not skip an applicable XDG root;
+ *     only the override-present case needs normalized path comparison;
  *     a valid sessions-root symlink to a directory that holds a matching recent
  *     .jsonl must still be discovered (verify-recent-chat / not-safe), not skipped
  *     by plain find -P traversal of the symlink root;
@@ -120,6 +125,8 @@ type AuditEnv = {
 	OMP_PROFILE?: string;
 	PI_PROFILE?: string;
 	PI_CODING_AGENT_DIR?: string;
+	PI_CONFIG_DIR?: string;
+	HOME?: string;
 };
 
 const fixtures: string[] = [];
@@ -368,7 +375,7 @@ function writeSessionsAsNonDirectory(home: string): void {
 function runAudit(fixture: Fixture, auditEnv: AuditEnv = {}): AuditResult {
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
-		HOME: fixture.home,
+		HOME: auditEnv.HOME ?? fixture.home,
 		PATH: `${fixture.bin}:${process.env.PATH ?? ""}`,
 		GIT_CONFIG_GLOBAL: "/dev/null",
 		GIT_CONFIG_SYSTEM: "/dev/null",
@@ -378,6 +385,7 @@ function runAudit(fixture: Fixture, auditEnv: AuditEnv = {}): AuditResult {
 	delete env.OMP_PROFILE;
 	delete env.PI_PROFILE;
 	delete env.PI_CODING_AGENT_DIR;
+	delete env.PI_CONFIG_DIR;
 	if (auditEnv.XDG_DATA_HOME !== undefined) {
 		env.XDG_DATA_HOME = auditEnv.XDG_DATA_HOME;
 	}
@@ -389,6 +397,9 @@ function runAudit(fixture: Fixture, auditEnv: AuditEnv = {}): AuditResult {
 	}
 	if (auditEnv.PI_CODING_AGENT_DIR !== undefined) {
 		env.PI_CODING_AGENT_DIR = auditEnv.PI_CODING_AGENT_DIR;
+	}
+	if (auditEnv.PI_CONFIG_DIR !== undefined) {
+		env.PI_CONFIG_DIR = auditEnv.PI_CONFIG_DIR;
 	}
 
 	const result = Bun.spawnSync(["bash", AUDIT_SCRIPT, fixture.repo], {
@@ -1207,5 +1218,37 @@ test("Windows ignores XDG sessions even for default agent_dir", () => {
 	expect(row.bucket).toBe("safe");
 	expect(row.lastChat).toBe("-");
 	expect(row.bucket).not.toBe("verify-recent-chat");
+});
+
+test("HOME trailing slash keeps isDefault true for applicable XDG sessions", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const xdgSessions = join(xdgDataHome, "omp", "sessions");
+	// Normalized agent_dir from `omp config path` (no trailing slash / no ./).
+	const agentDir = join(fixture.home, ".omp", "agent");
+	const homeWithTrailingSlash = `${fixture.home}/`;
+	// Lexical spelling that still denotes .omp after normalization.
+	const configDirWithSegments = "./.omp";
+
+	installOmpConfigPathStub(fixture.bin, agentDir);
+	// No PI_CODING_AGENT_DIR: without an override, isDefault is semantically true
+	// for the current profile regardless of HOME/PI_CONFIG_DIR path spelling.
+	writeSessionTranscript(xdgSessions, fixture.worktree, {
+		id: "xdg-under-trailing-slash-home",
+	});
+
+	const result = runAudit(fixture, {
+		HOME: homeWithTrailingSlash,
+		PI_CONFIG_DIR: configDirWithSegments,
+		XDG_DATA_HOME: xdgDataHome,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	// Today's textual `$HOME/$PI_CONFIG_DIR/agent` vs normalized omp config path
+	// falsely skips XDG and can mark a recent-session worktree safe.
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+	expect(row.bucket).not.toBe("safe");
 });
 
