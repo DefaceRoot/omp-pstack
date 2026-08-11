@@ -81,7 +81,11 @@ export type FakeExtensionAPI = {
 	sendUserMessage: (content: unknown, options?: unknown) => void;
 	setLabel: (label: string) => void;
 	zod: { object: (...args: unknown[]) => unknown; string: () => unknown; array: (...args: unknown[]) => unknown };
-	/** Host runtime surface read by the extension (`pi.pi.settings` / `getAgentDir`). */
+	/**
+	 * Injected pi-coding-agent module exports (`ExtensionAPI.pi`).
+	 * OMP 17.2.13 exports active-path `getAgentDir` from the package index;
+	 * extensions read it as `pi.pi.getAgentDir()`.
+	 */
 	pi?: {
 		settings?: FakeSettingsLike;
 		runSubprocess?: unknown;

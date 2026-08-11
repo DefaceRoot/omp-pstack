@@ -639,7 +639,7 @@ describe("pstack_task tool seam", () => {
 
 		const yielded = "YIELD: panel consensus ready";
 		const ompOmissionError =
-			'OMP requires outputSchema: { type: "string" } (or equivalently strict non-null text schema) for yielded string results';
+			'OMP 17.2.13 requires restrictToolNames:true with outputSchema:{type:"string"} and outputSchemaMode:"strict" for yielded string results';
 
 		const calls: Array<{
 			id: string;
@@ -824,12 +824,14 @@ describe("pstack_task tool seam", () => {
 		const agents: Array<Record<string, unknown>> = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			const agent = options.agent as Record<string, unknown> | undefined;
+			// Public ExecutorOptions fields (17.2.13 executor.ts ~379-412), not
+			// session-only requireYieldTool (forced true inside executor ~3073).
 			agents.push({
 				agent,
-				requireYieldTool: (options as { requireYieldTool?: unknown }).requireYieldTool,
 				restrictToolNames: (options as { restrictToolNames?: unknown }).restrictToolNames,
 				outputSchema: (options as { outputSchema?: unknown }).outputSchema,
 				outputSchemaMode: (options as { outputSchemaMode?: unknown }).outputSchemaMode,
+				taskDepth: (options as { taskDepth?: unknown }).taskDepth,
 			});
 			return { exitCode: 0, id: options.id, output: "ok" };
 		};
@@ -858,13 +860,16 @@ describe("pstack_task tool seam", () => {
 				} | undefined;
 				expect(hasNonRecursiveBuiltInToolWhitelist(agent)).toBe(true);
 				expect(requiresTerminalYieldWithTextData(agent?.systemPrompt)).toBe(true);
-				// Yield remains available through requireYieldTool, not by listing recursive task tools.
-				expect(entry.requireYieldTool).toBe(true);
+				// Public ExecutorOptions: restrictToolNames + strict text schema mode.
+				// Yield remains available because executor forces requireYieldTool:true
+				// on the child session — not by listing yield/task tools on agent.tools.
 				expect(hasRestrictedToolNames(entry)).toBe(true);
 				expect(isStrictTextOutputSchema(entry.outputSchema)).toBe(true);
 				expect(isStrictOutputSchemaMode(entry.outputSchemaMode)).toBe(true);
 				const tools = Array.isArray(agent?.tools) ? agent.tools : [];
 				expect(tools.includes("yield")).toBe(false);
+				expect(tools.includes("task")).toBe(false);
+				expect(tools.includes("pstack_task")).toBe(false);
 			}
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
