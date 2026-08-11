@@ -102,10 +102,12 @@ const STALE_SYMLINK_RM_COMMAND =
 /**
  * README must declare the runtime floor explicitly and explain why.
  * package.json peerDependency is owned by NativeYieldRed — do not assert it here.
+ * Local-link stale-symlink uninstall caveat stays separately pinned; it is not
+ * the reason for the minimum OMP runtime.
  */
 const REQUIRED_OMP_RUNTIME_FLOOR = "OMP >=17.2.13";
 const REQUIRED_OMP_RUNTIME_SAFETY_CLAUSE =
-	"Requires OMP >=17.2.13 for runtime safety: local-link uninstall may leave a stale node_modules symlink, and the doctor-then-manual-rm cleanup contract depends on that OMP runtime behavior.";
+	"Requires OMP >=17.2.13 for runtime safety: `pstack_task` depends on strict structured-yield enforcement, MCP-safe child extension isolation (`enableMCP` + empty preloaded paths), live settings APIs, and active-profile getAgentDir.";
 
 /**
  * Profile-aware generated-rule contract. Pin exact wording after whitespace
