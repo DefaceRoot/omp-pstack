@@ -702,10 +702,14 @@ export function orderStack(
   const start = byNumber.get(context.number);
   if (start === undefined) return [context];
   const down: T.OpenPullRequest[] = [];
+  const visitedDown = new Set<T.PrNumber>([start.number]);
   let current = start;
   while (byHead.has(current.baseRefName)) {
     const parent = byHead.get(current.baseRefName);
     if (parent === undefined) break;
+    if (visitedDown.has(parent.number))
+      missing("pull request stack.baseRefName", current.baseRefName);
+    visitedDown.add(parent.number);
     down.push(parent);
     current = parent;
   }
