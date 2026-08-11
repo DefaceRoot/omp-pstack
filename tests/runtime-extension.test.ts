@@ -12,7 +12,7 @@ import {
 } from "./helpers/runtime-expected-commands.ts";
 import {
 	hasNonRecursiveBuiltInToolWhitelist,
-	hasRestrictedToolNames,
+	preservesChildMcpWithoutExtensionReload,
 	requiresTerminalYieldWithTextData,
 } from "./helpers/runtime-agent-capabilities.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
@@ -660,27 +660,46 @@ describe("pstack_task tool seam", () => {
 
 		const yielded = "YIELD: panel consensus ready";
 		const ompOmissionError =
-			'OMP 17.2.13 requires restrictToolNames:true with outputSchema:{type:"string"} and outputSchemaMode:"strict" for yielded string results';
+			'OMP 17.2.13 requires outputSchema:{type:"string"}, outputSchemaMode:"strict", enableMCP:true, and empty preloaded extension/custom-tool paths (restrictToolNames omitted)';
 
 		const calls: Array<{
 			id: string;
 			outputSchema: unknown;
 			outputSchemaMode: unknown;
+			enableMCP: unknown;
 			restrictToolNames: unknown;
+			preloadedExtensionPaths: unknown;
+			preloadedCustomToolPaths: unknown;
 		}> = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			// Injected runSubprocess is the native-runner seam; OMP reads outputSchema here.
 			const outputSchema = (options as { outputSchema?: unknown }).outputSchema;
 			const outputSchemaMode = (options as { outputSchemaMode?: unknown }).outputSchemaMode;
+			const enableMCP = (options as { enableMCP?: unknown }).enableMCP;
 			const restrictToolNames = (options as { restrictToolNames?: unknown }).restrictToolNames;
-			calls.push({ id: options.id, outputSchema, outputSchemaMode, restrictToolNames });
+			const preloadedExtensionPaths = (options as { preloadedExtensionPaths?: unknown }).preloadedExtensionPaths;
+			const preloadedCustomToolPaths = (options as { preloadedCustomToolPaths?: unknown }).preloadedCustomToolPaths;
+			calls.push({
+				id: options.id,
+				outputSchema,
+				outputSchemaMode,
+				enableMCP,
+				restrictToolNames,
+				preloadedExtensionPaths,
+				preloadedCustomToolPaths,
+			});
 
-			// Simulate the OMP failure boundary: omitting a strict text schema / mode / tool
-			// restriction rejects the yielded-string success path (non-zero exit).
+			// Simulate the OMP failure boundary: omitting strict schema/mode or MCP-preserving
+			// preload policy rejects the yielded-string success path (non-zero exit).
 			if (
 				!isStrictTextOutputSchema(outputSchema) ||
 				!isStrictOutputSchemaMode(outputSchemaMode) ||
-				!hasRestrictedToolNames({ restrictToolNames })
+				!preservesChildMcpWithoutExtensionReload({
+					enableMCP,
+					restrictToolNames,
+					preloadedExtensionPaths,
+					preloadedCustomToolPaths,
+				})
 			) {
 				return {
 					id: options.id,
@@ -715,7 +734,7 @@ describe("pstack_task tool seam", () => {
 			for (const call of calls) {
 				expect(isStrictTextOutputSchema(call.outputSchema)).toBe(true);
 				expect(isStrictOutputSchemaMode(call.outputSchemaMode)).toBe(true);
-				expect(hasRestrictedToolNames(call)).toBe(true);
+				expect(preservesChildMcpWithoutExtensionReload(call)).toBe(true);
 			}
 
 			const text = toolResultText(result);
@@ -789,6 +808,114 @@ describe("pstack_task tool seam", () => {
 		}
 	});
 
+	test("two concurrent pstack_task executions share one extension-scoped live maxConcurrency limiter", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-shared-conc-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-shared-conc-home-"));
+		writePackageFixture(packageRoot);
+
+		const settings = createFakeSettings({ "task.maxConcurrency": 2 });
+		const runtime = createFakeRuntime({ cwd: packageRoot, settings });
+
+		let active = 0;
+		let maxActive = 0;
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await Bun.sleep(50);
+			active -= 1;
+			return { exitCode: 0, id: options.id, output: `done:${options.task}` };
+		};
+
+		try {
+			// One extension registration => one session/extension-scoped limiter.
+			// A limiter instantiated inside executeAssignments per call would allow
+			// maxActive up to 4 (2+2) under concurrent tool.execute.
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+
+			const [first, second] = await Promise.all([
+				tool.execute(
+					"call-shared-a",
+					{
+						strategy: "slice",
+						slices: [
+							{ id: "a1", task: "a-one" },
+							{ id: "a2", task: "a-two" },
+							{ id: "a3", task: "a-three" },
+						],
+						model: "m1",
+					},
+					undefined,
+					undefined,
+					runtime.createContext(),
+				),
+				tool.execute(
+					"call-shared-b",
+					{
+						strategy: "slice",
+						slices: [
+							{ id: "b1", task: "b-one" },
+							{ id: "b2", task: "b-two" },
+							{ id: "b3", task: "b-three" },
+						],
+						model: "m1",
+					},
+					undefined,
+					undefined,
+					runtime.createContext(),
+				),
+			]);
+
+			expect(maxActive).toBe(2);
+			expect(resultDetails(first).results).toHaveLength(3);
+			expect(resultDetails(second).results).toHaveLength(3);
+
+			// Live decrease: subsequent wave must observe settings.get updates.
+			settings.set("task.maxConcurrency", 1);
+			maxActive = 0;
+			await tool.execute(
+				"call-shared-dec",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: "d1", task: "dec-one" },
+						{ id: "d2", task: "dec-two" },
+						{ id: "d3", task: "dec-three" },
+					],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+			expect(maxActive).toBe(1);
+
+			// Live increase.
+			settings.set("task.maxConcurrency", 3);
+			maxActive = 0;
+			await tool.execute(
+				"call-shared-inc",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: "i1", task: "inc-one" },
+						{ id: "i2", task: "inc-two" },
+						{ id: "i3", task: "inc-three" },
+						{ id: "i4", task: "inc-four" },
+					],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+			expect(maxActive).toBe(3);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
 	test("poteto AgentDefinition systemPrompt requires terminal yield with non-null result.data text", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-yield-prompt-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-yield-prompt-home-"));
@@ -845,11 +972,13 @@ describe("pstack_task tool seam", () => {
 		const agents: Array<Record<string, unknown>> = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			const agent = options.agent as Record<string, unknown> | undefined;
-			// Public ExecutorOptions fields (17.2.13 executor.ts ~379-412), not
-			// session-only requireYieldTool (forced true inside executor ~3073).
+			// Public ExecutorOptions: preserve MCP, block extension reload via empty preloads.
 			agents.push({
 				agent,
+				enableMCP: (options as { enableMCP?: unknown }).enableMCP,
 				restrictToolNames: (options as { restrictToolNames?: unknown }).restrictToolNames,
+				preloadedExtensionPaths: (options as { preloadedExtensionPaths?: unknown }).preloadedExtensionPaths,
+				preloadedCustomToolPaths: (options as { preloadedCustomToolPaths?: unknown }).preloadedCustomToolPaths,
 				outputSchema: (options as { outputSchema?: unknown }).outputSchema,
 				outputSchemaMode: (options as { outputSchemaMode?: unknown }).outputSchemaMode,
 				taskDepth: (options as { taskDepth?: unknown }).taskDepth,
@@ -881,10 +1010,7 @@ describe("pstack_task tool seam", () => {
 				} | undefined;
 				expect(hasNonRecursiveBuiltInToolWhitelist(agent)).toBe(true);
 				expect(requiresTerminalYieldWithTextData(agent?.systemPrompt)).toBe(true);
-				// Public ExecutorOptions: restrictToolNames + strict text schema mode.
-				// Yield remains available because executor forces requireYieldTool:true
-				// on the child session — not by listing yield/task tools on agent.tools.
-				expect(hasRestrictedToolNames(entry)).toBe(true);
+				expect(preservesChildMcpWithoutExtensionReload(entry)).toBe(true);
 				expect(isStrictTextOutputSchema(entry.outputSchema)).toBe(true);
 				expect(isStrictOutputSchemaMode(entry.outputSchemaMode)).toBe(true);
 				const tools = Array.isArray(agent?.tools) ? agent.tools : [];

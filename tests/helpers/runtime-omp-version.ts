@@ -2,7 +2,8 @@
  * OMP host version gate for omp-pstack extension initialization.
  *
  * Public seam: `ExtensionAPI.pi.VERSION` (coding-agent package index export).
- * Minimum supported host: 17.2.13 (restrictToolNames / strict schema surface).
+ * Minimum supported host: 17.2.13 (ExecutorOptions enableMCP / preload / strict
+ * schema surface required by pstack_task).
  */
 export const MIN_OMP_CODING_AGENT_VERSION = "17.2.13";
 

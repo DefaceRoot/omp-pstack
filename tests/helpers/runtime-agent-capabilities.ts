@@ -2,23 +2,29 @@
  * Child AgentDefinition + ExecutorOptions capabilities at the raw runSubprocess seam.
  *
  * Source of truth (OMP 17.2.13 installed cache):
- * - ExecutorOptions: `@oh-my-pi/pi-coding-agent@17.2.13` `src/task/executor.ts` ~379-412
- *   (`outputSchema?`, `outputSchemaMode?`, `taskDepth?`, `restrictToolNames?`)
- * - `restrictToolNames: true` disables MCP and clears preloaded extension/custom-tool
- *   paths (~3004-3079); executor always sets `requireYieldTool: true` on the child
- *   session (not a public ExecutorOptions field callers must pass).
- * - Yield contract: `src/tools/yield.ts` ~316-380 — success needs non-null `result.data`;
- *   data-less / type-only yields are rejected.
+ * - ExecutorOptions: `@oh-my-pi/pi-coding-agent@17.2.13` `src/task/executor.ts`
+ *   (`outputSchema?`, `outputSchemaMode?`, `enableMCP?`, `preloadedExtensionPaths?`,
+ *   `preloadedCustomToolPaths?`, `restrictToolNames?`)
+ * - `restrictToolNames: true` disables MCP (`enableMCP = !restrictToolNames && …`) and
+ *   clears preloaded extension/custom-tool paths. Why/Reflect need child MCP, so
+ *   pstack_task must keep `enableMCP: true`, pass empty preload arrays to block
+ *   recursive extension reload, and leave `restrictToolNames` omitted/not-true.
+ * - Yield contract: `src/tools/yield.ts` — success needs non-null `result.data`.
  *
  * AgentDefinition must still carry a nonempty built-in tool whitelist excluding
- * recursive launchers (`task`, `pstack_task`) and empty `spawns`. Yield stays
- * available via the executor's forced requireYieldTool, not by listing `yield`
- * (or recursive task tools) on agent.tools.
+ * recursive launchers (`task`, `pstack_task`) and empty `spawns`.
  */
 export type AgentCapabilitySnapshot = {
 	tools?: unknown;
 	spawns?: unknown;
 	systemPrompt?: unknown;
+};
+
+export type ChildRunnerPolicySnapshot = {
+	enableMCP?: unknown;
+	restrictToolNames?: unknown;
+	preloadedExtensionPaths?: unknown;
+	preloadedCustomToolPaths?: unknown;
 };
 
 export function hasNonRecursiveBuiltInToolWhitelist(agent: AgentCapabilitySnapshot | null | undefined): boolean {
@@ -31,8 +37,7 @@ export function hasNonRecursiveBuiltInToolWhitelist(agent: AgentCapabilitySnapsh
 
 /**
  * Poteto/fallback AgentDefinition systemPrompt must explicitly require a terminal
- * `yield` with non-null `result.data` text — never a data-less / type-only yield
- * (matches yield.ts success path around 316-380).
+ * `yield` with non-null `result.data` text — never a data-less / type-only yield.
  */
 export function requiresTerminalYieldWithTextData(systemPrompt: unknown): boolean {
 	if (typeof systemPrompt !== "string" || systemPrompt.trim() === "") return false;
@@ -43,7 +48,21 @@ export function requiresTerminalYieldWithTextData(systemPrompt: unknown): boolea
 	return true;
 }
 
-/** Public ExecutorOptions flag: suppress discovered/reloaded extensions + MCP. */
-export function hasRestrictedToolNames(options: { restrictToolNames?: unknown } | null | undefined): boolean {
-	return options?.restrictToolNames === true;
+/**
+ * Preserve child MCP while blocking recursive extension/custom-tool reload:
+ * enableMCP:true, empty preload arrays, restrictToolNames omitted/not-true.
+ */
+export function preservesChildMcpWithoutExtensionReload(
+	options: ChildRunnerPolicySnapshot | null | undefined,
+): boolean {
+	if (!options) return false;
+	if (options.enableMCP !== true) return false;
+	if (options.restrictToolNames === true) return false;
+	if (!Array.isArray(options.preloadedExtensionPaths) || options.preloadedExtensionPaths.length !== 0) {
+		return false;
+	}
+	if (!Array.isArray(options.preloadedCustomToolPaths) || options.preloadedCustomToolPaths.length !== 0) {
+		return false;
+	}
+	return true;
 }
