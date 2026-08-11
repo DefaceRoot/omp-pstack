@@ -317,88 +317,95 @@ afterEach(async () => {
   }
 });
 
-async function withControllableGh<T>(
+type ReviewThreadNode = {
+  readonly id: string;
+  readonly isResolved: boolean;
+  readonly comments: {
+    readonly nodes: readonly {
+      readonly body: string;
+      readonly createdAt: string;
+      readonly path: string | null;
+      readonly line: number | null;
+      readonly author: { readonly login: string };
+    }[];
+  };
+};
+
+type ReviewThreadsPage = {
+  readonly pageInfo: {
+    readonly hasNextPage: boolean;
+    readonly endCursor: string | null;
+  };
+  readonly nodes: readonly ReviewThreadNode[];
+};
+
+function reviewThreadsResponse(page: ReviewThreadsPage) {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: page,
+        },
+      },
+    },
+  };
+}
+
+const blockingThread = {
+  id: "blocking-thread",
+  isResolved: false,
+  comments: {
+    nodes: [
+      {
+        body: "please fix this",
+        createdAt: "2026-08-11T00:00:00Z",
+        path: "src/app.ts",
+        line: 10,
+        author: { login: "reviewer" },
+      },
+    ],
+  },
+} as const satisfies ReviewThreadNode;
+
+async function withControllableGhPages<T>(
+  pages: readonly ReviewThreadsPage[],
   operation: (callsPath: string) => Promise<T>
 ): Promise<T> {
+  if (pages.length === 0) throw new Error("withControllableGhPages needs pages");
   const directory = await mkdtemp(join(tmpdir(), "watch-pr-gh-"));
   ghFixtureDirs.push(directory);
   const bin = join(directory, "bin");
   const callsPath = join(directory, "gh-calls.jsonl");
-  const page1Path = join(directory, "page1.json");
-  const page2Path = join(directory, "page2.json");
+  const pagesPath = join(directory, "pages.json");
   await mkdir(bin);
-
-  const endCursor = "cursor-page-1";
-  await writeFile(
-    page1Path,
-    JSON.stringify({
-      data: {
-        repository: {
-          pullRequest: {
-            reviewThreads: {
-              pageInfo: { hasNextPage: true, endCursor },
-              nodes: [],
-            },
-          },
-        },
-      },
-    })
-  );
-  await writeFile(
-    page2Path,
-    JSON.stringify({
-      data: {
-        repository: {
-          pullRequest: {
-            reviewThreads: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [
-                {
-                  id: "blocking-thread",
-                  isResolved: false,
-                  comments: {
-                    nodes: [
-                      {
-                        body: "please fix this",
-                        createdAt: "2026-08-11T00:00:00Z",
-                        path: "src/app.ts",
-                        line: 10,
-                        author: { login: "reviewer" },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        },
-      },
-    })
-  );
+  await writeFile(pagesPath, JSON.stringify(pages.map(reviewThreadsResponse)));
 
   const gh = join(bin, "gh");
   await writeFile(
     gh,
-    `#!/usr/bin/env bash
-set -euo pipefail
-calls=${JSON.stringify(callsPath)}
-page1=${JSON.stringify(page1Path)}
-page2=${JSON.stringify(page2Path)}
-printf '%s\\n' "$(printf '%s\\0' "$@" | base64 -w0)" >> "$calls"
-after=""
-for arg in "$@"; do
-  case "$arg" in
-    after=*) after="\${arg#after=}" ;;
-  esac
-done
-if [ -z "$after" ]; then
-  cat "$page1"
-elif [ "$after" = ${JSON.stringify(endCursor)} ]; then
-  cat "$page2"
-else
-  printf 'unexpected after cursor: %s\\n' "$after" >&2
-  exit 2
-fi
+    `#!/usr/bin/env bun
+import { appendFileSync, readFileSync } from "node:fs";
+const callsPath = ${JSON.stringify(callsPath)};
+const pages = JSON.parse(readFileSync(${JSON.stringify(pagesPath)}, "utf8"));
+const argv = process.argv.slice(2);
+appendFileSync(
+  callsPath,
+  Buffer.from(argv.join("\\0"), "utf8").toString("base64") + "\\n"
+);
+const afterArg = argv.find((arg) => arg.startsWith("after="));
+const after = afterArg === undefined ? null : afterArg.slice("after=".length);
+let index = 0;
+if (after !== null) {
+  const prior = pages.findIndex(
+    (page) => page.data.repository.pullRequest.reviewThreads.pageInfo.endCursor === after
+  );
+  if (prior < 0 || prior + 1 >= pages.length) {
+    console.error(\`unexpected after cursor: \${after}\`);
+    process.exit(2);
+  }
+  index = prior + 1;
+}
+process.stdout.write(JSON.stringify(pages[index]));
 `
   );
   await chmod(gh, 0o755);
@@ -427,16 +434,79 @@ async function readGhCalls(callsPath: string): Promise<readonly string[][]> {
 describe("GhGitHubReader.reviewThreads pagination", () => {
   it("fetches every page with endCursor and returns a later-page blocker before readiness", async () => {
     const endCursor = "cursor-page-1";
-    await withControllableGh(async (callsPath) => {
-      const threads = await new GhGitHubReader().reviewThreads(context);
-      const calls = await readGhCalls(callsPath);
-      const afterArgs = calls.map(
-        (argv) => argv.find((arg) => arg.startsWith("after=")) ?? null
-      );
+    await withControllableGhPages(
+      [
+        {
+          pageInfo: { hasNextPage: true, endCursor },
+          nodes: [],
+        },
+        {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [blockingThread],
+        },
+      ],
+      async (callsPath) => {
+        const threads = await new GhGitHubReader().reviewThreads(context);
+        const calls = await readGhCalls(callsPath);
+        const afterArgs = calls.map(
+          (argv) => argv.find((arg) => arg.startsWith("after=")) ?? null
+        );
 
-      expect(afterArgs).toEqual([null, `after=${endCursor}`]);
-      expect(threads.map((thread) => thread.id)).toEqual(["blocking-thread"]);
-      expect(threads[0]?.firstComment?.body).toBe("please fix this");
-    });
+        expect(afterArgs).toEqual([null, `after=${endCursor}`]);
+        expect(threads.map((thread) => thread.id)).toEqual(["blocking-thread"]);
+        expect(threads[0]?.firstComment?.body).toBe("please fix this");
+      }
+    );
+  });
+
+  it("rejects hasNextPage without an endCursor instead of returning a READY-looking empty page", async () => {
+    for (const endCursor of [null, ""] as const) {
+      await withControllableGhPages(
+        [
+          {
+            pageInfo: { hasNextPage: true, endCursor },
+            nodes: [],
+          },
+        ],
+        async () => {
+          let caught: unknown;
+          try {
+            await new GhGitHubReader().reviewThreads(context);
+          } catch (error) {
+            caught = error;
+          }
+          expect(caught).toBeInstanceOf(WatcherQueryError);
+          if (!(caught instanceof WatcherQueryError)) throw caught;
+          expect(caught.failure.retryable).toBe(true);
+        }
+      );
+    }
+  });
+
+  it("rejects a repeated endCursor instead of accepting duplicated page nodes", async () => {
+    const endCursor = "cursor-loop";
+    await withControllableGhPages(
+      [
+        {
+          pageInfo: { hasNextPage: true, endCursor },
+          nodes: [blockingThread],
+        },
+        {
+          pageInfo: { hasNextPage: true, endCursor },
+          nodes: [blockingThread],
+        },
+      ],
+      async () => {
+        let caught: unknown;
+        try {
+          await new GhGitHubReader().reviewThreads(context);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(WatcherQueryError);
+        if (!(caught instanceof WatcherQueryError)) throw caught;
+        expect(caught.failure.retryable).toBe(true);
+      }
+    );
   });
 });
