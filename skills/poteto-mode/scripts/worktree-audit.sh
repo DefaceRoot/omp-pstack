@@ -11,16 +11,28 @@ repo="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 [ -z "$repo" ] && { echo "not in a git repo; pass a repo path" >&2; exit 1; }
 cd "$repo" || exit 1
 
-# Main worktree is the first entry; everything else is a candidate.
-main_wt=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+# Main worktree is the first entry. Strip the porcelain record prefix rather
+# than splitting on whitespace because worktree paths may contain spaces.
+main_wt=$(git worktree list --porcelain \
+	| sed -n '/^worktree /{s/^worktree //;p;q;}')
 
 # origin/main drives the merge check. Best-effort; stale is fine for a first pass.
 git fetch origin main --quiet 2>/dev/null || echo "warn: could not fetch origin/main; merged column may be stale" >&2
 
-# PR state by branch, fetched once. Empty if gh is unavailable.
+# PR state by branch, fetched once. Without a complete response the audit
+# cannot prove that a merged worktree has no open PR, so fail closed.
 prs=$(mktemp)
-gh pr list --author "@me" --state all --limit 1000 \
-	--json number,state,headRefName 2>/dev/null > "$prs" || echo "[]" > "$prs"
+if ! gh pr list --author "@me" --state all --limit 1000 \
+	--json number,state,headRefName > "$prs"; then
+	rm -f "$prs"
+	echo "could not query GitHub PR state; refusing to classify worktrees" >&2
+	exit 1
+fi
+if ! jq -e 'type == "array"' "$prs" >/dev/null 2>&1; then
+	rm -f "$prs"
+	echo "could not parse GitHub PR state; refusing to classify worktrees" >&2
+	exit 1
+fi
 
 # OMP sessions are global; each JSONL header carries the authoritative cwd.
 if [ -n "${XDG_DATA_HOME:-}" ]; then
@@ -109,10 +121,13 @@ format_epoch_day() {
 
 printf "SIZE\tAGE\tMERGED\tDIRTY\tREMOTE\tPR\tLAST_CHAT\tBUCKET\tWORKTREE\n"
 
-git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt; do
+git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt; do
 	[ "$wt" = "$main_wt" ] && continue
 
+	size_kib=$(du -sk "$wt" 2>/dev/null | awk '{print $1}')
+	case "$size_kib" in ''|*[!0-9]*) size_kib=0 ;; esac
 	size=$(du -sh "$wt" 2>/dev/null | awk '{print $1}')
+	[ -n "$size" ] || size=?
 	head=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
 	head_ts=$(git -C "$wt" log -1 --format='%ct' HEAD 2>/dev/null || echo 0)
 	age=$([ "$head_ts" -gt 0 ] 2>/dev/null && echo "$(( (now - head_ts) / 86400 ))d" || echo "?")
@@ -199,8 +214,8 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 		esac ;;
 	esac
 
-	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-		"$size" "$age" "$merged" "$dirty" "$remote" "$pr" "$last" "$bucket" "$wt"
-done | sort -t$'\t' -k1,1 -rh
+	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+		"$size_kib" "$size" "$age" "$merged" "$dirty" "$remote" "$pr" "$last" "$bucket" "$wt"
+done | LC_ALL=C sort -t$'\t' -k1,1nr | cut -f2-
 
 rm -f "$prs" "$session_candidates"
