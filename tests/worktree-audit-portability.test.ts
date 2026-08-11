@@ -7,11 +7,21 @@
  * Independent sources of truth:
  *   - worktree-cleanup playbook buckets (verify-recent-chat vs safe)
  *   - OMP session header shape: {"type":"session",...,"cwd":"<path>"}
+ *   - active agent_dir from `omp config path` (named profiles: sessions under
+ *     <agent_dir>/sessions); applicable named-profile XDG data root
+ *     $XDG_DATA_HOME/omp/profiles/<profile>/sessions (OMP_PROFILE canonical,
+ *     PI_PROFILE fallback) without default-profile leakage; omp config path
+ *     failure is fail-closed
  *   - acceptance: recent matching transcript must be detected on GNU/Linux;
  *     timestamp-read failure must be fail-closed / not-safe (not recent=no);
  *     matching session header read/jq parse failure and transcript find/
  *     traversal failure must also be fail-closed / not-safe (verify-recent-chat,
  *     unknown, or explicit nonzero failure);
+ *     syntactically valid but non-session / wrong-shape first-line JSONL headers
+ *     are fail-closed / not-safe (not empty-skip);
+ *     recent session cwd equal to the worktree OR a descendant path
+ *     ($wt/packages/app) counts; sibling-prefix (${wt}-other) does not
+ *     (path-separator boundary);
  *     ordinary non-transcript files under sessions must be ignored (only .jsonl
  *     candidates are parsed) and must not poison an otherwise safe/review row;
  *     a confirmed-absent sessions path means no transcripts, but an existing
@@ -26,7 +36,7 @@
  *     missing/unauthenticated/nonzero gh pr list must not become [] → safe
  *     (nonzero exit, or PR unknown / non-safe).
  *
- * No network, GitHub, or real user state.
+ * No network, GitHub, or real user state. Fixtures never inspect real sessions.
  */
 import { afterEach, expect, test } from "bun:test";
 import {
@@ -71,6 +81,12 @@ type AuditResult = {
 	stdout: string;
 	stderr: string;
 	rows: AuditRow[];
+};
+
+type AuditEnv = {
+	XDG_DATA_HOME?: string;
+	OMP_PROFILE?: string;
+	PI_PROFILE?: string;
 };
 
 const fixtures: string[] = [];
@@ -228,28 +244,59 @@ exec /usr/bin/sort "$@"
 	);
 }
 
-function writeMatchingTranscript(home: string, cwd: string): string {
-	const sessionDir = join(
-		home,
-		".omp",
-		"agent",
-		"sessions",
-		"portability-session",
+/** Stub `omp config path` to a fixture-local agent_dir (never real user state). */
+function installOmpConfigPathStub(bin: string, agentDir: string): void {
+	writeExecutable(
+		join(bin, "omp"),
+		`#!/bin/sh
+if [ "$1" = "config" ] && [ "$2" = "path" ]; then
+	printf '%s\\n' "${agentDir}"
+	exit 0
+fi
+echo "omp stub: unexpected invocation: $*" >&2
+exit 1
+`,
 	);
+}
+
+/** Force `omp config path` to fail closed at the process boundary. */
+function installOmpConfigPathFailureStub(bin: string): void {
+	writeExecutable(
+		join(bin, "omp"),
+		`#!/bin/sh
+echo "omp: forced config path failure" >&2
+exit 1
+`,
+	);
+}
+
+function writeSessionTranscript(
+	sessionsRoot: string,
+	cwd: string,
+	options: {
+		id?: string;
+		header?: Record<string, unknown>;
+	} = {},
+): string {
+	const id = options.id ?? "portability-session";
+	const sessionDir = join(sessionsRoot, id);
 	mkdirSync(sessionDir, { recursive: true });
 	const transcript = join(sessionDir, "session.jsonl");
-	writeFileSync(
-		transcript,
-		`${JSON.stringify({
+	const header =
+		options.header ??
+		({
 			type: "session",
 			version: 3,
-			id: "portability-session",
+			id,
 			timestamp: "2026-08-11T12:00:00.000Z",
 			cwd,
-		})}\n`,
-		"utf8",
-	);
+		} satisfies Record<string, unknown>);
+	writeFileSync(transcript, `${JSON.stringify(header)}\n`, "utf8");
 	return transcript;
+}
+
+function writeMatchingTranscript(home: string, cwd: string): string {
+	return writeSessionTranscript(join(home, ".omp", "agent", "sessions"), cwd);
 }
 
 function writeNonTranscriptSessionArtifacts(home: string): void {
@@ -274,20 +321,7 @@ function writeMatchingTranscriptViaSessionsSymlink(
 	// is only a symlink. Plain find -P accepts -d on the symlink but does not
 	// traverse into the target, which would miss recent chats and fail open.
 	const realSessions = join(root, "real-sessions");
-	const sessionDir = join(realSessions, "portability-session");
-	mkdirSync(sessionDir, { recursive: true });
-	const transcript = join(sessionDir, "session.jsonl");
-	writeFileSync(
-		transcript,
-		`${JSON.stringify({
-			type: "session",
-			version: 3,
-			id: "portability-session",
-			timestamp: "2026-08-11T12:00:00.000Z",
-			cwd,
-		})}\n`,
-		"utf8",
-	);
+	const transcript = writeSessionTranscript(realSessions, cwd);
 	symlinkSync(realSessions, join(agent, "sessions"));
 	return transcript;
 }
@@ -298,7 +332,7 @@ function writeSessionsAsNonDirectory(home: string): void {
 	writeFileSync(join(agent, "sessions"), "unexpected file, not a sessions directory\n", "utf8");
 }
 
-function runAudit(fixture: Fixture): AuditResult {
+function runAudit(fixture: Fixture, auditEnv: AuditEnv = {}): AuditResult {
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		HOME: fixture.home,
@@ -306,7 +340,20 @@ function runAudit(fixture: Fixture): AuditResult {
 		GIT_CONFIG_GLOBAL: "/dev/null",
 		GIT_CONFIG_SYSTEM: "/dev/null",
 	};
+	// Never inherit real user profile / XDG roots; only fixture-local overrides.
 	delete env.XDG_DATA_HOME;
+	delete env.OMP_PROFILE;
+	delete env.PI_PROFILE;
+	delete env.PI_CODING_AGENT_DIR;
+	if (auditEnv.XDG_DATA_HOME !== undefined) {
+		env.XDG_DATA_HOME = auditEnv.XDG_DATA_HOME;
+	}
+	if (auditEnv.OMP_PROFILE !== undefined) {
+		env.OMP_PROFILE = auditEnv.OMP_PROFILE;
+	}
+	if (auditEnv.PI_PROFILE !== undefined) {
+		env.PI_PROFILE = auditEnv.PI_PROFILE;
+	}
 
 	const result = Bun.spawnSync(["bash", AUDIT_SCRIPT, fixture.repo], {
 		cwd: fixture.repo,
@@ -535,4 +582,172 @@ test("nonzero gh pr list is fail-closed / not fabricated [] → safe", () => {
 	// If the script continues, PR must be explicitly unknown/non-empty-safe — not
 	// the fabricated "-" that comes from rewriting a failed gh call as [].
 	expect(row.pr).not.toBe("-");
+});
+
+test("named-profile agent_dir from omp config path is scanned for recent sessions", () => {
+	const fixture = createFixture({ merged: true });
+	// Fixture-local agent_dir outside the hardcoded default ~/.omp/agent root.
+	const agentDir = join(fixture.root, "named-agent-from-omp");
+	installOmpConfigPathStub(fixture.bin, agentDir);
+	writeSessionTranscript(join(agentDir, "sessions"), fixture.worktree, {
+		id: "named-profile-session",
+	});
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	// Hardcoded default-only roots miss this transcript and fail open as safe.
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("named-profile XDG sessions are scanned without default-profile leakage", () => {
+	const fixture = createFixture({ merged: true });
+	const profile = "auditprof";
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const profileSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		profile,
+		"sessions",
+	);
+	const defaultSessions = join(xdgDataHome, "omp", "sessions");
+	const agentDir = join(fixture.home, ".omp", "profiles", profile, "agent");
+
+	// Applicable named-profile XDG root must already exist (OMP profile semantics).
+	mkdirSync(join(xdgDataHome, "omp", "profiles", profile), { recursive: true });
+	mkdirSync(defaultSessions, { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+
+	// Only the named-profile XDG root holds the matching recent session.
+	writeSessionTranscript(profileSessions, fixture.worktree, {
+		id: "xdg-profile-session",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		OMP_PROFILE: profile,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("default-profile XDG sessions do not leak into named-profile audit", () => {
+	const fixture = createFixture({ merged: true });
+	const profile = "auditprof";
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const profileSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		profile,
+		"sessions",
+	);
+	const defaultSessions = join(xdgDataHome, "omp", "sessions");
+	const agentDir = join(fixture.home, ".omp", "profiles", profile, "agent");
+
+	mkdirSync(join(xdgDataHome, "omp", "profiles", profile), { recursive: true });
+	mkdirSync(profileSessions, { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+
+	// Matching recent chat lives only under the default-profile XDG root.
+	writeSessionTranscript(defaultSessions, fixture.worktree, {
+		id: "default-profile-leak",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		OMP_PROFILE: profile,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	// Named-profile scans must not inherit default-profile sessions.
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
+});
+
+test("PI_PROFILE fallback selects named-profile XDG sessions when OMP_PROFILE unset", () => {
+	const fixture = createFixture({ merged: true });
+	const profile = "legacyprof";
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const profileSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		profile,
+		"sessions",
+	);
+	const agentDir = join(fixture.home, ".omp", "profiles", profile, "agent");
+
+	mkdirSync(join(xdgDataHome, "omp", "profiles", profile), { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+	writeSessionTranscript(profileSessions, fixture.worktree, {
+		id: "pi-profile-session",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		PI_PROFILE: profile,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("omp config path failure is fail-closed / not-safe", () => {
+	const fixture = createFixture({ merged: true });
+	installOmpConfigPathFailureStub(fixture.bin);
+
+	// Real jq remains on PATH so PR-array validation still succeeds and the
+	// audit reaches the session-root resolution path.
+	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
+});
+
+test("syntactically valid non-session jsonl header is fail-closed / not empty-skip", () => {
+	const fixture = createFixture({ merged: true });
+	// Valid JSON, wrong shape: not a session header. Empty-skip would treat this
+	// as "no transcript" and fail open to safe on a merged candidate.
+	writeSessionTranscript(join(fixture.home, ".omp", "agent", "sessions"), fixture.worktree, {
+		id: "wrong-shape-header",
+		header: {
+			type: "message",
+			role: "user",
+			cwd: fixture.worktree,
+			text: "not a session header",
+		},
+	});
+
+	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
+});
+
+test("recent session cwd in worktree descendant prevents safe", () => {
+	const fixture = createFixture({ merged: true });
+	const descendantCwd = join(fixture.worktree, "packages", "app");
+	mkdirSync(descendantCwd, { recursive: true });
+	writeMatchingTranscript(fixture.home, descendantCwd);
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	// Exact-only cwd compare misses $wt/packages/app and fails open as safe.
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("recent session cwd with sibling-prefix path does not prevent safe", () => {
+	const fixture = createFixture({ merged: true });
+	const siblingCwd = `${fixture.worktree}-other`;
+	mkdirSync(siblingCwd, { recursive: true });
+	writeMatchingTranscript(fixture.home, siblingCwd);
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	// Path-separator boundary: ${wt}-other is not $wt or a descendant of $wt.
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
 });
