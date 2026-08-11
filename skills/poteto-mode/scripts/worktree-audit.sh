@@ -21,7 +21,10 @@ git fetch origin main --quiet 2>/dev/null || echo "warn: could not fetch origin/
 
 # PR state by branch, fetched once. Without a complete response the audit
 # cannot prove that a merged worktree has no open PR, so fail closed.
-prs=$(mktemp)
+prs=$(mktemp) || {
+	echo "could not create PR-state file" >&2
+	exit 1
+}
 if ! gh pr list --author "@me" --state all --limit 1000 \
 	--json number,state,headRefName > "$prs"; then
 	rm -f "$prs"
@@ -34,54 +37,135 @@ if ! jq -e 'type == "array"' "$prs" >/dev/null 2>&1; then
 	exit 1
 fi
 
-# OMP sessions are global; each JSONL header carries the authoritative cwd.
-if [ -n "${XDG_DATA_HOME:-}" ]; then
-	transcripts="$XDG_DATA_HOME/omp/sessions"
+# Ask OMP exactly once for the active profile's agent directory. Its answer is
+# authoritative; falling back after a command or parse failure could inspect a
+# real default-profile session store while another profile is active.
+if ! agent_dir_output=$(omp config path); then
+	rm -f "$prs"
+	echo "could not resolve the active OMP agent directory; refusing to classify worktrees" >&2
+	exit 1
+fi
+case "$agent_dir_output" in
+	*$'\n'*)
+		rm -f "$prs"
+		echo "could not parse the active OMP agent directory; refusing to classify worktrees" >&2
+		exit 1
+		;;
+esac
+if ! agent_dir=$(printf '%s\n' "$agent_dir_output" \
+	| sed 's/^[[:space:]]*//;s/[[:space:]]*$//') || [ -z "$agent_dir" ]; then
+	rm -f "$prs"
+	echo "could not parse the active OMP agent directory; refusing to classify worktrees" >&2
+	exit 1
+fi
+case "$agent_dir" in
+	/*) ;;
+	*)
+		rm -f "$prs"
+		echo "active OMP agent directory is not absolute; refusing to classify worktrees" >&2
+		exit 1
+		;;
+esac
+
+# OMP_PROFILE is canonical even when explicitly set to empty; PI_PROFILE is
+# only the compatibility fallback when OMP_PROFILE is absent.
+if [ "${OMP_PROFILE+x}" = x ]; then
+	active_profile=$OMP_PROFILE
+elif [ "${PI_PROFILE+x}" = x ]; then
+	active_profile=$PI_PROFILE
 else
-	transcripts="$HOME/.omp/agent/sessions"
+	active_profile=
+fi
+if [ -n "$active_profile" ]; then
+	case "$active_profile" in
+		[![:alnum:]]*|*[![:alnum:]_.-]*)
+			rm -f "$prs"
+			echo "invalid OMP profile name; refusing to classify worktrees" >&2
+			exit 1
+			;;
+		*) ;;
+	esac
 fi
 
-# Materialize transcript discovery so find's exit status is not hidden by
-# process substitution. Follow a command-line sessions-root symlink explicitly,
-# but not symlinks discovered beneath it; -H has these semantics on both GNU
-# and BSD find. Only JSONL files are session transcripts, and a partial/failed
-# traversal is unsafe because it may omit the only matching transcript.
+xdg_data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+case "$xdg_data_home" in
+	/*) ;;
+	*)
+		rm -f "$prs"
+		echo "XDG_DATA_HOME is not absolute; refusing to classify worktrees" >&2
+		exit 1
+		;;
+esac
+
+session_roots=("$agent_dir/sessions")
+if [ -n "$active_profile" ]; then
+	session_roots+=("$xdg_data_home/omp/profiles/$active_profile/sessions")
+else
+	session_roots+=("$xdg_data_home/omp/sessions")
+fi
+
+# Materialize discovery across every applicable root so find failures are not
+# hidden by process substitution. Canonicalizing existing roots deduplicates
+# agent/XDG aliases and follows a command-line sessions-root symlink without
+# following symlinks discovered beneath it.
 session_candidates=$(mktemp) || {
 	rm -f "$prs"
 	echo "could not create transcript candidate list" >&2
 	exit 1
 }
 session_discovery_failed=no
-if [ -d "$transcripts" ]; then
-	if ! find -H "$transcripts" -type f -name '*.jsonl' -print0 > "$session_candidates"; then
-		session_discovery_failed=yes
-	fi
-elif [ -e "$transcripts" ] || [ -L "$transcripts" ]; then
-	# Existing non-directories and dangling links are not an empty session store.
-	session_discovery_failed=yes
-else
-	# Confirm absence through the nearest existing ancestor. A failed stat below
-	# an unsearchable ancestor is indistinguishable from absence unless the
-	# ancestor's search permission is checked explicitly.
-	probe=$transcripts
-	while :; do
-		parent=${probe%/*}
-		[ "$parent" = "$probe" ] && {
+resolved_session_roots=()
+for transcripts in "${session_roots[@]}"; do
+	if [ -d "$transcripts" ]; then
+		if ! resolved=$(CDPATH= cd -P -- "$transcripts" 2>/dev/null && pwd -P); then
 			session_discovery_failed=yes
+			resolved=$transcripts
+		fi
+	else
+		resolved=$transcripts
+	fi
+
+	duplicate=no
+	for known_root in "${resolved_session_roots[@]}"; do
+		[ "$known_root" = "$resolved" ] && {
+			duplicate=yes
 			break
 		}
-		[ -z "$parent" ] && parent=/
-		if [ -d "$parent" ]; then
-			[ -x "$parent" ] || session_discovery_failed=yes
-			break
-		fi
-		if [ -e "$parent" ] || [ -L "$parent" ]; then
-			session_discovery_failed=yes
-			break
-		fi
-		probe=$parent
 	done
-fi
+	[ "$duplicate" = yes ] || resolved_session_roots+=("$resolved")
+done
+
+for transcripts in "${resolved_session_roots[@]}"; do
+	if [ -d "$transcripts" ]; then
+		if ! find -H "$transcripts" -type f -name '*.jsonl' -print0 >> "$session_candidates"; then
+			session_discovery_failed=yes
+		fi
+	elif [ -e "$transcripts" ] || [ -L "$transcripts" ]; then
+		# Existing non-directories and dangling links are not an empty store.
+		session_discovery_failed=yes
+	else
+		# Confirm absence through the nearest existing ancestor. A failed stat
+		# below an unsearchable ancestor is indistinguishable from absence.
+		probe=$transcripts
+		while :; do
+			parent=${probe%/*}
+			[ "$parent" = "$probe" ] && {
+				session_discovery_failed=yes
+				break
+			}
+			[ -z "$parent" ] && parent=/
+			if [ -d "$parent" ]; then
+				[ -x "$parent" ] || session_discovery_failed=yes
+				break
+			fi
+			if [ -e "$parent" ] || [ -L "$parent" ]; then
+				session_discovery_failed=yes
+				break
+			fi
+			probe=$parent
+		done
+	fi
+done
 now=$(date +%s 2>/dev/null || echo 0)
 case "$now" in ''|*[!0-9]*) now=0 ;; esac
 
@@ -136,12 +220,36 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 	# real signal; merge-base only catches fast-forward/rebase merges.
 	git merge-base --is-ancestor "$head" origin/main 2>/dev/null && merged=YES || merged=no
 
-	# Distinguish real WIP (tracked edits) from disposable untracked scratch.
-	porcelain=$(git -C "$wt" status --porcelain 2>/dev/null)
-	if [ -z "$porcelain" ]; then dirty=clean
-	elif printf '%s\n' "$porcelain" | grep -qv '^??'; then
-		dirty="wip:$(printf '%s\n' "$porcelain" | grep -cv '^??')"
-	else dirty="scratch:$(printf '%s\n' "$porcelain" | grep -c '^??')"; fi
+	# Include ignored entries: they may be the only copy of user data (for
+	# example, a worktree-local .env) and therefore can never be called clean.
+	status_failed=no
+	if ! porcelain=$(git -C "$wt" status --porcelain --ignored 2>/dev/null); then
+		status_failed=yes
+		dirty=unknown
+	elif [ -z "$porcelain" ]; then
+		dirty=clean
+	else
+		counts=$(printf '%s\n' "$porcelain" | awk '
+			/^\?\?/ { untracked++; next }
+			/^!!/ { ignored++; next }
+			{ tracked++ }
+			END { print tracked + 0, untracked + 0, ignored + 0 }
+		')
+		IFS=' ' read -r tracked_count untracked_count ignored_count <<< "$counts"
+		if [ "$tracked_count" -gt 0 ]; then
+			dirty="wip:$tracked_count"
+			[ "$untracked_count" -gt 0 ] && dirty="$dirty,scratch:$untracked_count"
+			[ "$ignored_count" -gt 0 ] && dirty="$dirty,ignored:$ignored_count"
+		elif [ "$ignored_count" -gt 0 ]; then
+			if [ "$untracked_count" -gt 0 ]; then
+				dirty="scratch:$untracked_count,ignored:$ignored_count"
+			else
+				dirty="ignored:$ignored_count"
+			fi
+		else
+			dirty="scratch:$untracked_count"
+		fi
+	fi
 
 	branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 	if [ -z "$branch" ]; then remote=detached
@@ -155,11 +263,15 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 		'.[] | select(.headRefName==$b) | "#\(.number)/\(.state)"' "$prs" 2>/dev/null | head -1)
 	[ -z "$pr" ] && pr="-"
 
-	# Most recent chat whose first-line session header names this worktree.
-	# Parse only the header and compare cwd exactly so sibling paths and later
-	# transcript content do not match.
+	# Most recent chat whose valid first-line session header names this
+	# worktree or a descendant. Resolve both sides without eval so symlinked
+	# paths compare by location and a sibling prefix never counts as a child.
 	last="-"; last_ts=0; transcript_match=no; timestamp_failed=no
 	transcript_scan_failed=$session_discovery_failed
+	if ! wt_resolved=$(CDPATH= cd -P -- "$wt" 2>/dev/null && pwd -P); then
+		transcript_scan_failed=yes
+		wt_resolved=$wt
+	fi
 	while IFS= read -r -d '' candidate; do
 		header=""
 		IFS= read -r header < "$candidate"
@@ -169,14 +281,30 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 			continue
 		fi
 
-		# Check jq in this shell. An unparseable header could belong to this
-		# worktree, so treating it as a non-match would fail open.
-		if ! header_cwd=$(printf '%s\n' "$header" \
-			| jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null); then
+		# Every .jsonl candidate must start with a valid session object whose
+		# cwd is a string. Unknown or malformed data cannot prove safety.
+		if ! header_cwd=$(printf '%s\n' "$header" | jq -e -r '
+			if type == "object"
+				and .type == "session"
+				and (.cwd | type == "string")
+			then .cwd
+			else error("invalid session header")
+			end
+		' 2>/dev/null); then
 			transcript_scan_failed=yes
 			continue
 		fi
-		[ "$header_cwd" = "$wt" ] || continue
+		if ! header_cwd_resolved=$(CDPATH= cd -P -- "$header_cwd" 2>/dev/null && pwd -P); then
+			transcript_scan_failed=yes
+			continue
+		fi
+		if [ "$header_cwd_resolved" != "$wt_resolved" ]; then
+			wt_prefix=$wt_resolved/
+			case "$header_cwd_resolved" in
+				"$wt_prefix"*) ;;
+				*) continue ;;
+			esac
+		fi
 		transcript_match=yes
 
 		if candidate_ts=$(file_mtime "$candidate" 2>/dev/null); then
@@ -206,12 +334,18 @@ git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt
 		recent=no
 	fi
 
-	case "$dirty" in wip:*) bucket=hold-wip ;; *)
-		case "$pr" in *OPEN*) bucket=hold-open-pr ;; *)
-			if [ "$recent" != no ]; then bucket=verify-recent-chat
-			elif [ "$merged" = YES ] || [ "$pr" != "-" ]; then bucket=safe
-			else bucket=review; fi ;;
-		esac ;;
+	case "$dirty" in
+		wip:*|*ignored:*|unknown) bucket=hold-wip ;;
+		*)
+			case "$pr" in
+				*OPEN*) bucket=hold-open-pr ;;
+				*)
+					if [ "$recent" != no ]; then bucket=verify-recent-chat
+					elif [ "$merged" = YES ] || [ "$pr" != "-" ]; then bucket=safe
+					else bucket=review; fi
+					;;
+			esac
+			;;
 	esac
 
 	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
