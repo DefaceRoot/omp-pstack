@@ -20,9 +20,9 @@ Run:
 /setup-pstack
 ```
 
-[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) runs `omp models --json`, shows every role and review panel, and asks what you want using selectors OMP actually reported. It writes `~/.omp/agent/rules/pstack-models.md`, the generated rule read by `pstack_task`.
+[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) runs `omp config path` to resolve the active profile's `agent_dir`, then runs `omp models --json`, shows every role and review panel, and asks what you want using selectors OMP actually reported. It writes `<agent_dir>/rules/pstack-models.md`, the generated rule read by `pstack_task`.
 
-A missing role uses `auto`. To restore defaults, rerun `/setup-pstack` or remove that generated rule with `/pstack-cleanup`.
+A missing role uses `auto`. To restore defaults, rerun `/setup-pstack` or use `/pstack-cleanup` to remove exactly that generated `<agent_dir>/rules/pstack-models.md` file.
 
 `inherit-parent` and `auto` both tell `pstack_task` to omit its model override, so OMP inherits the parent/default selection. For a panel role the value is a list and one subprocess runs per entry, so list length sets panel size. `swarm workers` supplies the default for slice workers unless a race names each arm's selector.
 
@@ -32,7 +32,7 @@ At the end of setup, `/setup-pstack` looks for a way to prove app behavior in yo
 
 Say yes and it writes `.omp/skills/verify-<app>/`, a project-local skill that teaches agents to drive your app the way a user does. It proves the skill works once before handing it over. Say no and setup moves on. You can run `/create-verification-skill` yourself any time. [Verify and ship](./06-verify-and-ship.md#create-a-project-verification-skill) covers when it earns its place.
 
-The generated model rule is available to subsequent `pstack_task` calls immediately. A fresh session is only needed after installing or enabling the extension itself.
+After `/setup-pstack` writes `<agent_dir>/rules/pstack-models.md`, run `/reload-plugins` or start a new OMP session before the changed P-Stack model routing applies. The already-running session does not read the changed rule immediately.
 
 ## Run your first task
 
