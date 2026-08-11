@@ -41,16 +41,17 @@ import { join } from "node:path";
  * `XDG_DATA_HOME` is unset.
  * User-authored skill discovery/write/evidence uses `<agent_dir>/skills`
  * resolved the same way — never `~/.omp/agent/skills`. Project
- * `.omp/skills` remains valid. Reflect reviewers must not hardcode
- * `~/.omp/plugins/node_modules/`; plugin skill evidence uses actual /
- * `skill://` paths recorded in the transcript, or resolves the active
- * `plugins_directory` via `omp plugin doctor` (profile/XDG-aware), never
- * a default-only plugins root. automate-me update mode uses Git history
- * only when the selected skill is tracked in the current project
- * repository; for user-authored / otherwise untracked active-profile
- * skills under `<agent_dir>/skills`, use a portable file mtime as the
- * edit start point, and stop/report if neither timestamp is readable.
- * An unconditional `git log -1 --format=%cI <path>` breaks the newly
+ * `.omp/skills` remains valid. Reflect reviewers must not assume any
+ * fixed/default `~/.omp/plugins` root (OMP 17.2.13 `getPluginsDir` is
+ * profile/XDG-aware). Plugin skill evidence uses actual transcript /
+ * `skill://` SKILL.md paths, or resolves the active `plugins_directory`
+ * via `omp plugin doctor` (profile/XDG-aware) — never a default-only
+ * plugins assumption. automate-me update mode uses Git history only when
+ * the selected skill is tracked in the current project repository; for
+ * user-authored / otherwise untracked active-profile skills under
+ * `<agent_dir>/skills`, use a portable file mtime as the edit start
+ * point, and stop/report if neither timestamp is readable. An
+ * unconditional `git log -1 --format=%cI <path>` breaks the newly
  * supported user-skill path. Assert every known consumer in one focused
  * suite so a single stale default-path caller fails RED.
  */
@@ -109,8 +110,12 @@ const HARDCODED_DEFAULT_SESSIONS = "~/.omp/agent/sessions";
 /** Hardcoded default-profile user-skills root — forbidden. */
 const HARDCODED_DEFAULT_SKILLS = "~/.omp/agent/skills";
 
-/** Hardcoded default-profile plugin skills root — forbidden. */
-const HARDCODED_DEFAULT_PLUGINS = "~/.omp/plugins/node_modules";
+/**
+ * Any fixed/default plugins root under `~/.omp/plugins` — forbidden.
+ * OMP 17.2.13 `getPluginsDir` is profile/XDG-aware; do not require or
+ * assume the default-profile path (with or without `/node_modules`).
+ */
+const HARDCODED_DEFAULT_PLUGINS = /~\/\.omp\/plugins(?:\/|$)/;
 
 /**
  * Default-profile XDG sessions root (`$XDG_DATA_HOME/omp/sessions`). Required
@@ -168,18 +173,22 @@ const AGENT_DIR_SKILLS =
 const PROJECT_SKILLS = /\.omp\/skills/;
 
 /**
- * Plugin skill evidence from paths / `skill://` references actually recorded
- * in the transcript (not an invented default plugins root).
+ * Plugin skill evidence from actual transcript / `skill://` SKILL.md paths
+ * (not an invented fixed plugins root).
  */
 const PLUGIN_EVIDENCE_FROM_TRANSCRIPT =
-	/(?:actual|recorded)[\s\S]{0,120}(?:skill:\/\/|plugin[\s\S]{0,40}path)|(?:skill:\/\/|plugin[\s\S]{0,40}path)[\s\S]{0,120}(?:actual|recorded)|(?:path|skill:\/\/)[\s\S]{0,100}recorded\s+in\s+(?:the\s+)?transcript|transcript[\s\S]{0,100}(?:skill:\/\/|plugin[\s\S]{0,40}path)/i;
+	/(?:actual\s+paths?|paths?\s+recorded|skill:\/\/\s*paths?\s+recorded|recorded\s+in\s+(?:the\s+)?transcript)[\s\S]{0,120}(?:skill:\/\/|SKILL\.md)|(?:skill:\/\/|SKILL\.md)[\s\S]{0,120}(?:actual\s+paths?|paths?\s+recorded|recorded\s+in\s+(?:the\s+)?transcript)|(?:actual\s+(?:transcript\s+)?(?:paths?|skill:\/\/)|skill:\/\/\s*paths?\s+recorded\s+in\s+(?:the\s+)?transcript)/i;
 
 /**
- * Active plugins directory from `omp plugin doctor`'s `plugins_directory`
- * check — profile/XDG-aware, never a hardcoded default-only root.
+ * Active profile/XDG-aware plugins directory from `omp plugin doctor`'s
+ * `plugins_directory` check — never a hardcoded default-only root.
  */
 const PLUGIN_DIR_VIA_OMP_PLUGIN_DOCTOR =
 	/(?:omp plugin doctor[\s\S]{0,220}plugins_directory|plugins_directory[\s\S]{0,220}omp plugin doctor)/i;
+
+/** Named/active profile must not inherit a default-only plugins root. */
+const NO_DEFAULT_ONLY_PLUGINS_ASSUMPTION =
+	/(?:never|do\s+not|don't|without)[\s\S]{0,120}(?:default(?:-|\s+)?(?:profile|only)|fixed|hardcoded)[\s\S]{0,80}plugins|(?:default(?:-|\s+)?(?:profile|only)|fixed|hardcoded)[\s\S]{0,80}plugins[\s\S]{0,120}(?:never|do\s+not|don't|forbid|avoid)|(?:profile|XDG)[\s\S]{0,80}aware[\s\S]{0,120}plugins_directory|plugins_directory[\s\S]{0,120}(?:profile|XDG)[\s\S]{0,40}aware/i;
 
 /**
  * Unconditional Git committer-date edit start — forbidden. Breaks
@@ -354,15 +363,15 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 		expect(violations).toEqual([]);
 	});
 
-	test("every reflect reviewer forbids hardcoded ~/.omp/plugins/node_modules/, resolves plugin evidence via transcript skill:// paths or omp plugin doctor plugins_directory, and preserves project + <agent_dir>/skills", () => {
+	test("every reflect reviewer forbids any fixed ~/.omp/plugins assumption, resolves plugin evidence via transcript skill:// SKILL.md paths or omp plugin doctor plugins_directory, and preserves project + <agent_dir>/skills", () => {
 		const violations: string[] = [];
 
 		for (const relativePath of REFLECT_REVIEWER_PLUGIN_CONSUMERS) {
 			const body = readConsumer(relativePath);
 
-			if (body.includes(HARDCODED_DEFAULT_PLUGINS)) {
+			if (HARDCODED_DEFAULT_PLUGINS.test(body)) {
 				violations.push(
-					`${relativePath}: still mentions fixed ${HARDCODED_DEFAULT_PLUGINS}/`,
+					`${relativePath}: still assumes fixed/default ~/.omp/plugins (OMP getPluginsDir is profile/XDG-aware)`,
 				);
 			}
 
@@ -386,7 +395,13 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 
 			if (!resolvesPluginEvidenceWithoutDefaultOnly(body)) {
 				violations.push(
-					`${relativePath}: plugin skill evidence must use actual/skill:// paths recorded in the transcript, or resolve active plugins_directory via \`omp plugin doctor\` (profile/XDG-aware), never a default-only plugins root`,
+					`${relativePath}: plugin skill evidence must use actual transcript/skill:// SKILL.md paths, or resolve active plugins_directory via \`omp plugin doctor\` (profile/XDG-aware)`,
+				);
+			}
+
+			if (!NO_DEFAULT_ONLY_PLUGINS_ASSUMPTION.test(body)) {
+				violations.push(
+					`${relativePath}: must not leak/assume a default-only plugins root; plugins_directory resolution must be profile/XDG-aware`,
 				);
 			}
 		}
