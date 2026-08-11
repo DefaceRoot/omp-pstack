@@ -32,7 +32,7 @@ At the end of setup, `/setup-pstack` looks for a way to prove app behavior in yo
 
 Say yes and it writes `.omp/skills/verify-<app>/`, a project-local skill that teaches agents to drive your app the way a user does. It proves the skill works once before handing it over. Say no and setup moves on. You can run `/create-verification-skill` yourself any time. [Verify and ship](./06-verify-and-ship.md#create-a-project-verification-skill) covers when it earns its place.
 
-After `/setup-pstack` writes `<agent_dir>/rules/pstack-models.md`, run `/reload-plugins` or start a new OMP session before the changed P-Stack model routing applies. The already-running session does not read the changed rule immediately.
+After `/setup-pstack` writes or updates `<agent_dir>/rules/pstack-models.md`, you must start a new OMP session before relying on the changed P-Stack model routing. `/reload-plugins` does not refresh active rules in OMP 17.2.13 and is insufficient; the already-running session does not read the changed rule.
 
 ## Run your first task
 

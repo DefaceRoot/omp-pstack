@@ -64,7 +64,7 @@ Read `<agent_dir>/rules/pstack-models.md` back once and confirm it exactly match
 
 ### 6. Confirm
 
-Tell the user the exact resolved `<agent_dir>/rules/pstack-models.md` path written. Explain that OMP does not read the changed rule into the already-running session immediately: before the changed P-Stack model routing applies, they must run `/reload-plugins` or start a new OMP session. Re-running this skill under the same active profile updates the same file; changing `--profile` or `OMP_PROFILE` can select another `agent_dir`.
+Tell the user the exact resolved `<agent_dir>/rules/pstack-models.md` path written. Explain that OMP does not read the changed rule into the already-running session immediately. After writing or updating the model rule, they must start a new OMP session before relying on the changed P-Stack model routing. `/reload-plugins` does not refresh active rules in OMP 17.2.13 and is insufficient. Re-running this skill under the same active profile updates the same file; changing `--profile` or `OMP_PROFILE` can select another `agent_dir`.
 
 ### 7. Offer a verification skill (optional)
 
