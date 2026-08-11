@@ -50,6 +50,8 @@ export type RunSubprocessOptions = {
 	enableLsp?: boolean;
 };
 
+type AgentDefinition = NonNullable<RunSubprocessOptions["agent"]>;
+
 export type AssignmentResult = {
 	id: string;
 	exitCode: number;
@@ -81,31 +83,38 @@ export type ExecuteAssignmentsOptions = {
 	modelRegistry?: unknown;
 	settings?: unknown;
 	agentPrompt?: string;
+	runtimeIdPrefix?: string;
 };
 
-/** Map P-Stack's inheritance sentinels to the host's omitted model override. */
-export function resolveModelOverride(model: ModelSelection): string | undefined {
+/** Map P-Stack's inheritance sentinels to the active parent model selector. */
+export function resolveModelOverride(
+	model: ModelSelection,
+	parentModelOverride?: string,
+): string | undefined {
 	if (model === undefined) return undefined;
 	const normalized = model.trim();
-	if (normalized === "" || normalized === "auto" || normalized === "inherit-parent") return undefined;
+	if (normalized === "" || normalized === "auto" || normalized === "inherit-parent") return parentModelOverride;
 	return normalized;
 }
 
 /** Expand a panel or a set of independent slices into the one internal assignment form. */
-export function expandAssignments(request: AssignmentRequest): Assignment[] {
+export function expandAssignments(
+	request: AssignmentRequest,
+	parentModelOverride?: string,
+): Assignment[] {
 	if (request.strategy === "panel") {
 		const models = request.models ?? [request.model];
 		return models.map((model, index) => ({
 			id: `panel-${index}`,
 			task: request.prompt,
-			modelOverride: resolveModelOverride(model),
+			modelOverride: resolveModelOverride(model, parentModelOverride),
 		}));
 	}
 
 	return request.slices.map((slice) => ({
 		id: slice.id,
 		task: slice.task,
-		modelOverride: resolveModelOverride(slice.model ?? request.model),
+		modelOverride: resolveModelOverride(slice.model ?? request.model, parentModelOverride),
 	}));
 }
 
@@ -121,11 +130,28 @@ function failedResult(id: string, error: unknown): AssignmentResult {
 	};
 }
 
+const FALLBACK_AGENT: AgentDefinition = {
+	name: "poteto-agent",
+	description: "P-Stack parallel worker",
+	systemPrompt: "Complete the assigned task thoroughly and return the result.",
+	source: "project",
+};
+
+function assignmentAgent(agentPrompt: string | undefined): AgentDefinition {
+	const systemPrompt = agentPrompt?.trim();
+	if (!systemPrompt) return FALLBACK_AGENT;
+	return {
+		...FALLBACK_AGENT,
+		systemPrompt,
+	};
+}
+
 /** Execute every assignment immediately and retain input order in the returned details. */
 export async function executeAssignments(
 	assignments: readonly Assignment[],
 	options: ExecuteAssignmentsOptions,
 ): Promise<AssignmentResult[]> {
+	const agent = assignmentAgent(options.agentPrompt);
 	return Promise.all(
 		assignments.map(async (assignment, index) => {
 			if (options.signal?.aborted) return cancelledResult(assignment.id);
@@ -134,7 +160,7 @@ export async function executeAssignments(
 			let result: AssignmentResult;
 			try {
 				result = await options.runSubprocess({
-					id: assignment.id,
+					id: options.runtimeIdPrefix ? `${options.runtimeIdPrefix}-${index}` : assignment.id,
 					index,
 					task: assignment.task,
 					cwd: options.cwd,
@@ -144,14 +170,7 @@ export async function executeAssignments(
 						options.onProgress?.({ id: assignment.id, index, state: "progress", progress }),
 					modelRegistry: options.modelRegistry,
 					settings: options.settings,
-					agent: options.agentPrompt
-						? {
-							name: "poteto-agent",
-							description: "P-Stack parallel worker",
-							systemPrompt: options.agentPrompt,
-							source: "project",
-						}
-						: undefined,
+					agent,
 					enableLsp: false,
 				});
 			} catch (error) {

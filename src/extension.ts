@@ -56,6 +56,11 @@ export type PstackExtensionOptions = {
 	};
 };
 
+type ActiveModel = {
+	provider: string;
+	id: string;
+};
+
 type CommandContext = {
 	cwd: string;
 	ui: {
@@ -66,8 +71,12 @@ type CommandContext = {
 		getBranch?: () => unknown[];
 		getEntries?: () => unknown[];
 	};
+	model?: ActiveModel;
 	modelRegistry?: unknown;
-	models?: { registry?: unknown };
+	models?: {
+		registry?: unknown;
+		current?: () => ActiveModel | undefined;
+	};
 };
 
 type ExtensionApi = {
@@ -151,6 +160,12 @@ function asToolUpdate(onUpdate: unknown, text: string): void {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function activeModelSelector(ctx: CommandContext): string | undefined {
+	const model = ctx.model ?? ctx.models?.current?.();
+	if (!model?.provider || !model.id) return undefined;
+	return `${model.provider}/${model.id}`;
 }
 
 function parseAssignmentRequest(params: Record<string, unknown>): AssignmentRequest {
@@ -275,10 +290,13 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			},
 		});
 
-		pi.on("session_start", (_event: unknown, ctx: CommandContext) => {
+		const reconstructMode = (_event: unknown, ctx: CommandContext): void => {
 			const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
 			modeActive = latestModeState(entries);
-		});
+		};
+		for (const event of ["session_start", "session_switch", "session_branch", "session_tree"]) {
+			pi.on(event, reconstructMode);
+		}
 
 		pi.on(
 			"before_agent_start",
@@ -324,7 +342,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			description: "Run a model panel or independent P-Stack task slices concurrently.",
 			parameters,
 			async execute(
-				_toolCallId: string,
+				toolCallId: string,
 				params: Record<string, unknown>,
 				signal: AbortSignal | undefined,
 				onUpdate: unknown,
@@ -338,7 +356,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 				}
 
 				const request = parseAssignmentRequest(params);
-				const assignments = expandAssignments(request);
+				const assignments = expandAssignments(request, activeModelSelector(ctx));
 				const runSubprocess = options.runSubprocess ?? pi.pi?.runSubprocess;
 				if (!runSubprocess) throw new Error("pstack_task requires pi.pi.runSubprocess or an injected runSubprocess");
 
@@ -357,6 +375,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 					modelRegistry: ctx.modelRegistry ?? ctx.models?.registry,
 					settings: pi.pi?.settings,
 					agentPrompt,
+					runtimeIdPrefix: `pstack-${toolCallId}`,
 					onProgress(progress) {
 						if (progress.state === "completed") {
 							asToolUpdate(onUpdate, `Completed ${progress.id} (exit ${progress.result?.exitCode ?? "?"}).`);
@@ -364,7 +383,13 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 					},
 				});
 				const text = results
-					.map((result) => `${result.id}: exit ${result.exitCode}${result.error ? ` — ${result.error}` : ""}`)
+					.map((result, index) => {
+						const workerText = [result.output, result.error, result.stderr].find(
+							(value) => typeof value === "string" && value.trim() !== "",
+						);
+						const logicalId = assignments[index]?.id ?? result.id;
+						return `${logicalId}: exit ${result.exitCode}${workerText ? `\n${workerText}` : ""}`;
+					})
 					.join("\n");
 				return {
 					content: [{ type: "text", text: text || "No P-Stack assignments were requested." }],
