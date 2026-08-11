@@ -128,8 +128,32 @@ if [ -n "$active_profile" ]; then
 	esac
 fi
 
+session_discovery_failed=no
 session_roots=("$agent_dir/sessions")
-if [ "${XDG_DATA_HOME+x}" = x ] && [ -n "$XDG_DATA_HOME" ]; then
+
+# DirResolver consults XDG only on Linux/macOS and only while the active agent
+# directory is the profile-derived default. A custom PI_CODING_AGENT_DIR and
+# unsupported platforms keep all session state under the active agent directory.
+config_dir_name=${PI_CONFIG_DIR:-.omp}
+if [ -n "$active_profile" ]; then
+	profile_default_agent="$HOME/$config_dir_name/profiles/$active_profile/agent"
+else
+	profile_default_agent="$HOME/$config_dir_name/agent"
+fi
+xdg_applicable=no
+if [ "$agent_dir" = "$profile_default_agent" ] \
+	&& [ "${XDG_DATA_HOME+x}" = x ] \
+	&& [ -n "$XDG_DATA_HOME" ]; then
+	if platform_name=$(uname -s 2>/dev/null); then
+		case "$platform_name" in
+			Linux|Darwin) xdg_applicable=yes ;;
+		esac
+	else
+		session_discovery_failed=yes
+	fi
+fi
+
+if [ "$xdg_applicable" = yes ]; then
 	xdg_data_home=$XDG_DATA_HOME
 	case "$xdg_data_home" in
 		/*) ;;
@@ -147,9 +171,29 @@ if [ "${XDG_DATA_HOME+x}" = x ] && [ -n "$XDG_DATA_HOME" ]; then
 	fi
 	if [ -d "$xdg_profile_root" ] || [ -e "$xdg_profile_root" ] || [ -L "$xdg_profile_root" ]; then
 		session_roots+=("$xdg_profile_root/sessions")
+	else
+		# An explicitly configured XDG root is optional only when its absence
+		# can be confirmed through a searchable existing ancestor.
+		probe=$xdg_profile_root
+		while :; do
+			parent=${probe%/*}
+			[ "$parent" = "$probe" ] && {
+				session_discovery_failed=yes
+				break
+			}
+			[ -z "$parent" ] && parent=/
+			if [ -d "$parent" ]; then
+				[ -x "$parent" ] || session_discovery_failed=yes
+				break
+			fi
+			if [ -e "$parent" ] || [ -L "$parent" ]; then
+				session_discovery_failed=yes
+				break
+			fi
+			probe=$parent
+		done
 	fi
 fi
-
 # Materialize discovery across every applicable root so find failures are not
 # hidden by process substitution. Canonicalizing existing roots deduplicates
 # agent/XDG aliases and follows a command-line sessions-root symlink without
@@ -159,7 +203,6 @@ session_candidates=$(mktemp) || {
 	echo "could not create transcript candidate list" >&2
 	exit 1
 }
-session_discovery_failed=no
 resolved_session_roots=()
 for transcripts in "${session_roots[@]}"; do
 	if [ -d "$transcripts" ]; then
