@@ -30,6 +30,12 @@
  *     candidates are parsed) and must not poison an otherwise safe/review row;
  *     a confirmed-absent sessions path means no transcripts, but an existing
  *     non-directory or inaccessible/unsearchable sessions path must fail closed;
+ *     when XDG_DATA_HOME is explicitly configured and the applicable
+ *     $XDG_DATA_HOME/omp (default) or named-profile ancestor is
+ *     inaccessible/unsearchable, discovery must distinguish that from
+ *     confirmed absence (session discovery failure/unknown) and never mark a
+ *     merged clean no-PR candidate safe — today's `[ -d ] || [ -e ] || [ -L ]`
+ *     gate on the XDG profile root silently omits the store;
  *     a valid sessions-root symlink to a directory that holds a matching recent
  *     .jsonl must still be discovered (verify-recent-chat / not-safe), not skipped
  *     by plain find -P traversal of the symlink root;
@@ -1102,4 +1108,33 @@ test("invalid profile name fails closed under usual lowercase-safe validation", 
 		OMP_PROFILE: "Bad Name",
 	});
 	expectFailClosedNotSafe(result, fixture.worktree);
+});
+
+test("inaccessible explicit XDG omp ancestor is fail-closed / never safe", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const ompRoot = join(xdgDataHome, "omp");
+	const defaultSessions = join(ompRoot, "sessions");
+	const agentDir = join(fixture.home, ".omp", "agent");
+
+	// Applicable default XDG store exists and holds a recent matching session.
+	// Agent sessions stay confirmed-absent so the only possible evidence is here.
+	installOmpConfigPathStub(fixture.bin, agentDir);
+	writeSessionTranscript(defaultSessions, fixture.worktree, {
+		id: "hidden-under-unsearchable-xdg",
+	});
+
+	// Make XDG_DATA_HOME unsearchable: `[ -d $XDG/omp ]` / `-e` / `-L` all fail
+	// even though omp exists, so today's gate silently omits the root and
+	// treats the candidate like confirmed absence → safe.
+	chmodSync(xdgDataHome, 0o000);
+	try {
+		const result = runAudit(fixture, {
+			XDG_DATA_HOME: xdgDataHome,
+		});
+		// Must surface session discovery failure/unknown — never safe.
+		expectFailClosedNotSafe(result, fixture.worktree);
+	} finally {
+		chmodSync(xdgDataHome, 0o700);
+	}
 });
