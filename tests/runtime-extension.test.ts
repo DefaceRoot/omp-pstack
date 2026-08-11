@@ -25,11 +25,21 @@ import {
 	type RunSubprocessFn,
 } from "../src/pstack-task.ts";
 
+// Fixture skill body must be longer than the sticky reminder so the
+// "short reminder" assertion can distinguish full prompt vs reminder.
 const POTETO_SKILL_BODY = `# Poteto mode
 
 ## Non-negotiables
 
-Start every multi-step task with a todolist.
+Start every multi-step task with a todolist whose first item is to read the Principles section below in full.
+
+## Principles
+
+Apply principle-laziness-protocol, principle-prove-it-works, and principle-never-block-on-the-human when they match the current turn. Name each principle that shaped a decision.
+
+## Autonomy
+
+Just do it. Proceed on reversible work and present the result instead of asking for permission first.
 `;
 
 const POTETO_REMINDER =
