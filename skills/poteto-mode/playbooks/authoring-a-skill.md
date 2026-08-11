@@ -2,7 +2,7 @@
 
 **You own the skill's voice.** Agent-facing prose has a higher bar than human prose; unhelpful sentences become instructions.
 
-1. Choose the OMP target. Project-authored skills live one level under `.omp/skills/<name>/SKILL.md`; user-authored skills live under `~/.omp/agent/skills/<name>/SKILL.md`. If the user explicitly wants a personal managed skill and `manage_skill` is available, use `manage_skill` instead and omit frontmatter from its body.
+1. Choose the OMP target. Project-authored skills live one level under `.omp/skills/<name>/SKILL.md`; for user-authored skills, resolve `agent_dir` by running `omp config path`, trim its non-empty output, and use `<agent_dir>/skills/<name>/SKILL.md`. If the user explicitly wants a personal managed skill and `manage_skill` is available, use `manage_skill` instead and omit frontmatter from its body.
 2. Author the smallest complete `SKILL.md`. Frontmatter has a lowercase kebab-case `name` matching the directory and a concrete `description`; operational cross-skill reads use `skill://<name>` and bundled assets use `skill://<name>/<relative-path>`.
 3. Validate that referenced files exist and `skill://` links resolve. Add behavioral cases when the contract is structural; skip subjective tests.
 4. Apply `skill://unslop`, then run `skill://poteto-mode/playbooks/opening-a-pr.md`.

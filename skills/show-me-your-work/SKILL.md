@@ -53,7 +53,7 @@ Commit it only when the work is ambitious enough that a reviewer needs the trail
 
 ## Audit the log against the transcript
 
-At the end of the run, check that the log told the truth. Use the current OMP session path when supplied. Otherwise search recursively under `~/.omp/agent/sessions/` (or `$XDG_DATA_HOME/omp/sessions/`), inspect each first JSONL session header, and choose the newest file whose `cwd` equals the active workspace and whose id/title matches this run. Never audit a different `cwd`. Walk the log against what actually happened:
+At the end of the run, check that the log told the truth. Prefer the current OMP session path, an explicit transcript path, or a supplied `history://` or `agent://` reference. Only when none resolves, run `omp config path`, trim its non-empty output as `agent_dir`, and search `<agent_dir>/sessions` recursively. For a named profile, use `OMP_PROFILE`, or `PI_PROFILE` only when `OMP_PROFILE` is unset; after validating it against `[A-Za-z0-9][A-Za-z0-9_.-]*`, also consider `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` (using the platform XDG data default when the variable is unset). Never read default-profile sessions while a named profile is active. Inspect each first JSONL session header and choose the newest file whose `cwd` equals the active workspace and whose id/title matches this run. Never audit a different `cwd`. Walk the log against what actually happened:
 
 - Every row maps to a real action. Cut invented or aspirational entries.
 - Each row's evidence resolves and shows what the row claims.

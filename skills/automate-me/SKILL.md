@@ -14,7 +14,7 @@ This skill orchestrates an inline mining pass, OMP `SKILL.md` authoring (or `man
 
 ### 0. Check for an existing skill
 
-Look one level under `.omp/skills/*-mode/SKILL.md` and `~/.omp/agent/skills/*-mode/SKILL.md` for the user's handle. OMP skill discovery is non-recursive under each skills root, so never hide a generated mode inside a category directory. If one exists, confirm intent with the lowercase `ask` tool unless the user already requested an update:
+Resolve `agent_dir` by running `omp config path` and trimming its non-empty output. Look one level under `.omp/skills/*-mode/SKILL.md` and `<agent_dir>/skills/*-mode/SKILL.md` for the user's handle. OMP skill discovery is non-recursive under each skills root, so never hide a generated mode inside a category directory. If one exists, confirm intent with the lowercase `ask` tool unless the user already requested an update:
 
 - Update the existing skill (default for repeat runs)
 - Start fresh (rare; ask why before doing it)
@@ -26,7 +26,7 @@ Update mode changes the rest of the flow:
 
 ### 1. Mine their history
 
-Locate OMP transcripts recursively under `~/.omp/agent/sessions/` (or `$XDG_DATA_HOME/omp/sessions/`). Filter candidates by the first JSONL session header's `cwd`, which must equal the active workspace, and order by modification time. Never read a different workspace's transcript without explicit permission.
+Prefer an explicit current OMP session path, transcript path, `history://` reference, or `agent://` handoff before filesystem discovery. If none resolves, run `omp config path`, trim its non-empty output as `agent_dir`, and search `<agent_dir>/sessions` recursively. For a named profile, use `OMP_PROFILE`, or `PI_PROFILE` only when `OMP_PROFILE` is unset; after validating it against `[A-Za-z0-9][A-Za-z0-9_.-]*`, also consider `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` (using the platform XDG data default when the variable is unset). Never read default-profile sessions while a named profile is active. Filter candidates by the first JSONL session header's `cwd`, which must equal the active workspace, and order by modification time. Never read a different workspace's transcript without explicit permission.
 
 Survey recent agent conversations within that scope for recurring patterns. Call `pstack_task` with `strategy: "slice"`, one complete task per non-overlapping time window (for example, three slices across the last 2-4 weeks), and the configured fast selector or `auto`. Each OMP slice reads only the header-filtered transcript paths the parent provides and returns a short structured list of patterns with evidence pointers. Default signals worth hunting:
 
@@ -66,7 +66,7 @@ Read `skill://poteto-mode` for granularity. Don't copy its content; the user's r
 
 Author or update the skill as a normal OMP `SKILL.md`:
 
-- Path: preserve the existing path. For a new project mode, write `.omp/skills/<handle>-mode/SKILL.md`. For a user-authored mode, write `~/.omp/agent/skills/<handle>-mode/SKILL.md`. Both roots are one-level, non-recursive discovery locations.
+- Path: preserve the existing path. For a new project mode, write `.omp/skills/<handle>-mode/SKILL.md`. For a user-authored mode, resolve `agent_dir` with `omp config path` and write `<agent_dir>/skills/<handle>-mode/SKILL.md`. Both roots are one-level, non-recursive discovery locations.
 - Managed alternative: only when the user explicitly wants a personal managed skill and `manage_skill` is available, call `manage_skill` with `action: "create"` or `"update"` instead of writing an authored path.
 - Handle: the user's first name or chosen identifier.
 - Frontmatter `name`: exactly `<handle>-mode` in lowercase kebab case.

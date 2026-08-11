@@ -20,7 +20,8 @@ Scan for:
 
 Findings must point to skills, tools, or MCPs invoked in this transcript. Speculative routings to skills the parent never opened do not count. To check whether a skill was used, scan the transcript for:
 
-- `read` tool calls against any `SKILL.md` file (workspace `.omp/skills/`, user-level `~/.omp/agent/skills/`, or plugin-installed paths under `~/.omp/plugins/node_modules/`)
+- Before checking user-authored skills, resolve `agent_dir` by running `omp config path` and trim its non-empty output.
+- `read` tool calls against any `SKILL.md` file (workspace `.omp/skills/`, user-level `<agent_dir>/skills/`, or plugin-installed paths under `~/.omp/plugins/node_modules/`)
 - `pstack_task` prompts that name a skill path
 - Tool calls (`bash`, `grep`, MCP tools, etc.) that match a skill's documented commands
 
