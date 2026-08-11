@@ -44,7 +44,11 @@
  *     a merged candidate with no open PR and no recent matching transcript
  *     but exactly one untracked (scratch) file must keep dirty=scratch:N and
  *     still never bucket as safe — hold/review only (scratch counts are
- *     inspect signals per the cleanup playbook, never prune permission).
+ *     inspect signals per the cleanup playbook, never prune permission);
+ *     open-PR completeness must exhaust a paginated all-authors open-PR API:
+ *     a matching branch only on page 2 authored by someone else must hold as
+ *     hold-open-pr — the bounded `gh pr list --author @me --limit 1000` miss
+ *     is fail-open for shared branches.
  *
  * No network, GitHub, or real user state. Fixtures never inspect real sessions.
  */
@@ -902,4 +906,88 @@ test("PI_PROFILE=default fallback uses default XDG sessions root not profiles/de
 	const row = rowFor(result.rows, fixture.worktree);
 	expect(row.bucket).toBe("verify-recent-chat");
 	expect(row.lastChat).toMatch(DATE_RE);
+});
+
+test("paginated other-author open PR on page 2 holds open", () => {
+	const fixture = createFixture({ merged: true });
+	const page1 = join(fixture.root, "gh-open-prs-page-1.json");
+	const page2 = join(fixture.root, "gh-open-prs-page-2.json");
+	const boundedHits = join(fixture.root, "gh-bounded-author-hits");
+	const paginatedPages = join(fixture.root, "gh-paginated-pages");
+
+	// Independent source of truth: matching OPEN PR is authored by someone else
+	// and lives only on page 2 of the all-open listing. Page 1 is filler only.
+	writeFileSync(
+		page1,
+		JSON.stringify([
+			{
+				number: 7,
+				state: "OPEN",
+				headRefName: "unrelated-branch",
+				author: { login: "alice" },
+			},
+		]) + "\n",
+		"utf8",
+	);
+	writeFileSync(
+		page2,
+		JSON.stringify([
+			{
+				number: 42,
+				state: "OPEN",
+				headRefName: "candidate",
+				author: { login: "other-dev" },
+			},
+		]) + "\n",
+		"utf8",
+	);
+
+	// Stub: bounded --author @me / --limit 1000 returns empty (today's call).
+	// Paginated all-open API serves page 1 then page 2; --paginate concatenates.
+	writeExecutable(
+		join(fixture.bin, "gh"),
+		`#!/bin/sh
+args="$*"
+case "$args" in
+	*--author*|*@me*)
+		echo 1 >> "${boundedHits}"
+		echo '[]'
+		exit 0
+		;;
+esac
+
+# Paginated all-open pulls (future completeness path).
+case "$args" in
+	*--paginate*)
+		echo 1 >> "${paginatedPages}"
+		echo 2 >> "${paginatedPages}"
+		# Simulate gh api --paginate array concatenation across both pages.
+		jq -s 'add' "${page1}" "${page2}"
+		exit $?
+		;;
+	*page=2*|*page%3D2*|*page=2\\&*|*\\&page=2*)
+		echo 2 >> "${paginatedPages}"
+		cat "${page2}"
+		exit 0
+		;;
+	*pulls*|*/pulls?*|*state=open*|*--state*open*)
+		echo 1 >> "${paginatedPages}"
+		cat "${page1}"
+		exit 0
+		;;
+esac
+
+echo "gh stub: unexpected invocation: $*" >&2
+exit 1
+`,
+	);
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	// Must discover the page-2 other-author OPEN PR and hold — not miss via
+	// author=@me --limit 1000 and fail open as safe/pr=-.
+	expect(row.pr).toMatch(/#42\/OPEN/);
+	expect(row.bucket).toBe("hold-open-pr");
 });
