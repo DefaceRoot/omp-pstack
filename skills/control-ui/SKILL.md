@@ -30,8 +30,8 @@ Use OMP's native `browser` tool before assembling a one-off script:
 
 1. Start a dev server or Electron process with `hub start`; use its log pattern and port readiness checks instead of sleeping.
 2. Call `browser` with action `open` once. Supply the local URL for a web app, or `app.cdp_url` for an existing Chromium DevTools Protocol endpoint.
-3. Call `browser` with action `run` and begin with `tab.observe()` or `tab.ariaSnapshot()` to read the current accessibility structure.
-4. Act through stable accessibility references, roles, labels, or `data-*` selectors. Re-observe after navigation or re-rendering because references can become stale.
+3. Call `browser` with action `run` whose only job is observation: `return await tab.observe()` or `return await tab.ariaSnapshot()`, so the accessibility structure is displayed in the tool result before anything is clicked.
+4. Choose the target from that surfaced output, then act in a subsequent `run` through the returned refs, roles, labels, or `data-*` selectors. If the page navigated or re-rendered in between, its refs are stale: re-snapshot and act inside that same later run.
 5. Use `tab.screenshot()` only when visual appearance is evidence; use structural observations for state and accessibility checks.
 6. Reuse the named browser tab for the full interaction, then close it and stop the process with `hub stop`.
 
@@ -39,19 +39,33 @@ Use `read` to inspect repository scripts and configuration. Reserve `bash` for s
 
 ## Generic Web Harness
 
-With OMP, open the local URL through the native `browser` tool, observe the page, act on the latest structure, and take a screenshot after the state change when visual evidence is required. A native run can use helpers such as:
+With OMP, open the local URL through the native `browser` tool, observe in one run, act on that observation in the next, and screenshot after the state change when visual appearance is the evidence. Keep observation and action in separate runs so the chosen target is visible before it is used:
 
 ```javascript
-await tab.observe();
-await tab.click("aria/Submit");
+// run 1 — surface the structure; choose nothing yet
+return await tab.ariaSnapshot();
+```
+
+```javascript
+// run 2 — act on a ref that appeared in run 1's output, then re-observe
+await tab.click("e14"); // [ref=e14] button "Submit"
 await tab.screenshot({ fullPage: true });
+return await tab.observe();
 ```
 
 Do not add Playwright as a project dependency just for this probe unless the user asks. Prefer OMP's native browser or existing dev dependencies already available in the environment.
 
 ## Generic CDP Harness
 
-For Electron or a Chromium app launched with `--remote-debugging-port=<port>`, call OMP `browser` with action `open` and `app.cdp_url` set to `http://127.0.0.1:<debug-port>`. Inspect the available page with `tab.observe()` and select the surface by stable app content or accessibility markers rather than tab order.
+For Electron or a Chromium app launched with `--remote-debugging-port=<port>`, call OMP `browser` with action `open` and `app.cdp_url` set to `http://127.0.0.1:<debug-port>`. When the endpoint exposes more than one page, enumerate the candidates first and return one entry per page title and URL:
+
+```javascript
+// run 1 — enumerate candidate pages; bind nothing implicitly
+const pages = await browser.pages();
+return await Promise.all(pages.map(async (p) => ({ url: p.url(), title: await p.title() })));
+```
+
+Take the entry carrying the stable app marker, then bind that page explicitly: call `open` again with the same `app.cdp_url` plus `app.target` set to a title or URL substring unique to it. Observe and act only after that binding. `tab.observe()` reads whichever page OMP is already bound to; it cannot move the binding to another page.
 
 If the repository already provides Playwright and its own harness, `chromium.connectOverCDP(...)` remains an appropriate repo-native path. Do not add it solely for the probe.
 
@@ -80,6 +94,7 @@ When multiple app windows/tabs share a debug port:
 
 - Prefer a positive marker for the surface under test, such as an app root selector.
 - Use a negative marker to avoid the wrong surface when necessary.
+- Bind the surface under test with an explicit `app.target` marker rather than trusting page order or the endpoint's first page.
 - If no page matches, list available page titles and URLs instead of guessing.
 
 ## Guardrails
