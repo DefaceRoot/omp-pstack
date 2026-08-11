@@ -102,7 +102,16 @@ For a clean removal, perform these steps while the plugin is still enabled:
    omp plugin uninstall @defaceroot/omp-pstack
    ```
 
-For a GitHub remote install, uninstall removes OMP's managed installed copy. For a local-link install from a local checkout, uninstall removes only OMP's plugin registration/link; it never deletes the user-owned checkout or working tree.
+For a recommended GitHub remote install, uninstall removes OMP's managed installed copy cleanly.
+
+For a local-link install from a local checkout, uninstall removes OMP plugin registration but may leave the OMP node_modules symlink; it always preserves the user-owned checkout or working tree. This is the verified OMP 17.2.13/Bun behavior.
+
+After uninstall, run `omp plugin doctor` to obtain plugins_directory. If the stale symlink remains, manually remove only `<plugins_directory>/node_modules/@defaceroot/omp-pstack`.
+
+```sh
+omp plugin doctor
+rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"
+```
 
 Uninstall removes package-owned assets shipped by the plugin, including its installed `src/`, `skills/`, `agents/`, `automations/`, documentation, and license files. It does not remove user-generated project artifacts: project files, worktrees, branches, reports, configuration, and other P-Stack outputs remain yours. `/pstack-cleanup` also does not remove those artifacts or the local checkout; when confirmed, it deletes only `~/.omp/agent/rules/pstack-models.md`, and declining leaves that file unchanged. If the plugin has already been uninstalled, inspect and remove that one generated rule manually if desired.
 
