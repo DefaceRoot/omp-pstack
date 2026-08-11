@@ -7,12 +7,15 @@ import { join } from "node:path";
  * - skills/poteto-mode/playbooks/orchestrate.md
  * - skills/poteto-mode/playbooks/worktree-cleanup.md
  * - automations/benny/README.md
+ * - automations/benny/FOR_AGENTS.md
  * - automations/benny/skills/setup-benny/SKILL.md
  *
  * Independent source of truth: OMP orch store binding (`--store` / `ORCH_STORE`),
  * OMP `/goal set` wake (not a pstack "loop skill"), no Cursor user-state deletion,
  * and Benny as dormant/archive-only with no native scheduler — plugin enablement
  * only via the OMP-generated enable command, never hand-authored registry JSON.
+ * FOR_AGENTS.md is an active agent entrypoint and must not teach runnable
+ * copy/enable/list/automate/editor bootstrap.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -32,6 +35,7 @@ const WORKTREE_CLEANUP = join(
 	"worktree-cleanup.md",
 );
 const BENNY_README = join(ROOT, "automations", "benny", "README.md");
+const BENNY_FOR_AGENTS = join(ROOT, "automations", "benny", "FOR_AGENTS.md");
 const SETUP_BENNY = join(
 	ROOT,
 	"automations",
@@ -95,12 +99,16 @@ describe("pstack native guidance content contracts", () => {
 	test("benny stays dormant without a native scheduler, enables pstack only via OMP, and does not hand-author registry JSON or runnable Cursor automate/editor steps", () => {
 		const readme = readSeam(BENNY_README);
 		const setup = readSeam(SETUP_BENNY);
+		const forAgents = readSeam(BENNY_FOR_AGENTS);
 
-		for (const body of [readme, setup]) {
+		for (const body of [readme, setup, forAgents]) {
 			expect(body).toMatch(/\bdormant\b|\barchive-only\b/i);
 			expect(body).toMatch(
 				/no native scheduler|without (?:a )?native scheduler|no native activation(?: path)?/i,
 			);
+		}
+
+		for (const body of [readme, setup]) {
 			expect(body).not.toMatch(
 				/(?:let|run|use|invoke|follow|open|ask)\b[\s\S]{0,100}(?:\/automate|`automate`|Automations editor)/i,
 			);
@@ -119,5 +127,21 @@ describe("pstack native guidance content contracts", () => {
 		}
 
 		expect(readme).toContain(OMP_PLUGIN_ENABLE);
+
+		// Active agent entrypoint: reject every runnable activation/bootstrap step.
+		expect(forAgents).not.toMatch(
+			/merge the entire source pack|copy (?:this |the )?(?:whole |entire )?pack into/i,
+		);
+		expect(forAgents).not.toMatch(/omp plugin enable/);
+		expect(forAgents).not.toMatch(/omp plugin list/);
+		expect(forAgents).not.toMatch(
+			/(?:use|run|invoke|follow)\b[\s\S]{0,80}(?:\/automate|`automate`)|(?:\/automate|`automate`)[\s\S]{0,80}(?:once|handoff|editor)/i,
+		);
+		expect(forAgents).not.toMatch(
+			/Automations editor|edit each automation directly in its editor/i,
+		);
+		expect(forAgents).not.toMatch(
+			/read and follow[\s\S]{0,120}setup-benny/i,
+		);
 	});
 });
