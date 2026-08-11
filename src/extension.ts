@@ -177,6 +177,13 @@ function resultTextKey(text: string): string {
 	return text.replace(/\s+/g, " ");
 }
 
+const SAFE_SLICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function frameResultLines(channel: "output" | "error" | "stderr", text: string): string {
+	const prefix = `  ${channel}: `;
+	return prefix + text.replace(/\r\n?|\n/g, `\n${prefix}`);
+}
+
 function activeModelSelector(ctx: CommandContext): string | undefined {
 	const model = ctx.model ?? ctx.models?.current?.();
 	if (!model?.provider || !model.id) return undefined;
@@ -213,6 +220,9 @@ function parseAssignmentRequest(params: Record<string, unknown>): AssignmentRequ
 		if (!slice || typeof slice !== "object") throw new Error(`slice ${index} must be an object`);
 		if (!("id" in slice) || typeof slice.id !== "string" || slice.id === "") {
 			throw new Error(`slice ${index} requires an id`);
+		}
+		if (!SAFE_SLICE_ID.test(slice.id)) {
+			throw new Error(`slice ${index} id must be a safe token matching ${SAFE_SLICE_ID}`);
 		}
 		if (!("task" in slice) || typeof slice.task !== "string") {
 			throw new Error(`slice ${index} requires a task`);
@@ -444,22 +454,24 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 				const text = results
 					.map((result, index) => {
 						const logicalId = assignments[index]?.id ?? result.id;
-						let rendered = `${logicalId}: exit ${result.exitCode}`;
+						let rendered = `<<< begin pstack assignment >>>\n${logicalId}: exit ${result.exitCode}`;
 						const output = nonemptyResultText(result.output);
 						const outputKey = output === undefined ? undefined : resultTextKey(output);
-						if (output !== undefined) rendered += `\n${output}`;
-						if (result.exitCode === 0) return rendered;
+						if (output !== undefined) rendered += `\n${frameResultLines("output", output)}`;
+						if (result.exitCode === 0) return `${rendered}\n<<< end pstack assignment >>>`;
 
 						const error = nonemptyResultText(result.error);
 						const errorKey = error === undefined ? undefined : resultTextKey(error);
-						if (error !== undefined && errorKey !== outputKey) rendered += `\nerror: ${error}`;
+						if (error !== undefined && errorKey !== outputKey) {
+							rendered += `\n${frameResultLines("error", error)}`;
+						}
 
 						const stderr = nonemptyResultText(result.stderr);
 						const stderrKey = stderr === undefined ? undefined : resultTextKey(stderr);
 						if (stderr !== undefined && stderrKey !== outputKey && stderrKey !== errorKey) {
-							rendered += `\nstderr: ${stderr}`;
+							rendered += `\n${frameResultLines("stderr", stderr)}`;
 						}
-						return rendered;
+						return `${rendered}\n<<< end pstack assignment >>>`;
 					})
 					.join("\n");
 				return {
