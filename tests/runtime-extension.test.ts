@@ -16,6 +16,7 @@ import {
 	requiresTerminalYieldWithTextData,
 } from "./helpers/runtime-agent-capabilities.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
+import { MIN_OMP_CODING_AGENT_VERSION } from "./helpers/runtime-omp-version.ts";
 import { isStrictOutputSchemaMode, isStrictTextOutputSchema } from "./helpers/runtime-output-schema.ts";
 import { createFakeSettings } from "./helpers/runtime-settings.ts";
 
@@ -123,6 +124,26 @@ describe("omp-pstack runtime extension", () => {
 	afterEach(() => {
 		rmSync(packageRoot, { recursive: true, force: true });
 		rmSync(homeDir, { recursive: true, force: true });
+	});
+
+	test("extension initialization rejects pi.pi.VERSION below 17.2.13 with a clear minimum-version error", () => {
+		for (const version of ["17.2.12", "16.0.0", "17.2.12-beta.1", undefined] as const) {
+			const isolated = createFakeRuntime({ cwd: packageRoot, version });
+			expect(() => loadExtension(isolated, { packageRoot, homeDir })).toThrow(
+				new RegExp(`minimum.*${MIN_OMP_CODING_AGENT_VERSION.replace(/\./g, "\\.")}|${MIN_OMP_CODING_AGENT_VERSION.replace(/\./g, "\\.")}.*minimum|VERSION.*${MIN_OMP_CODING_AGENT_VERSION.replace(/\./g, "\\.")}`, "i"),
+			);
+			expect(isolated.commands.size).toBe(0);
+			expect(isolated.tools.size).toBe(0);
+		}
+	});
+
+	test("extension initialization proceeds when pi.pi.VERSION is 17.2.13 or newer", () => {
+		for (const version of ["17.2.13", "17.2.14", "18.0.0"] as const) {
+			const isolated = createFakeRuntime({ cwd: packageRoot, version });
+			expect(() => loadExtension(isolated, { packageRoot, homeDir })).not.toThrow();
+			expect(isolated.commands.has("poteto-mode")).toBe(true);
+			expect(isolated.tools.has("pstack_task")).toBe(true);
+		}
 	});
 
 	test("registers poteto-mode, the other 22 P-Stack direct skills, bundled team-kit skills, and session commands unprefixed", () => {

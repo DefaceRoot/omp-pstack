@@ -243,6 +243,13 @@ test("package.json names an installable omp-pstack extension with pinned metadat
 	expect(presentLifecycleHooks).toEqual([]);
 });
 
+test("package.json peerDependencies requires @oh-my-pi/pi-coding-agent >=17.2.13", () => {
+	const pkg = readPackageJson();
+	const peer = pkg.peerDependencies ?? {};
+	// Independent source of truth: OMP 17.2.13 public ExecutorOptions / restrictToolNames surface.
+	expect(peer["@oh-my-pi/pi-coding-agent"]).toBe(">=17.2.13");
+});
+
 test("README documents exact remote/local install, disable, cleanup, uninstall, and verification commands", () => {
 	const readme = readReadme();
 	const lines = fencedExampleLines(readme);

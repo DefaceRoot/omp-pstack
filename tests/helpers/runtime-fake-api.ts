@@ -90,6 +90,8 @@ export type FakeExtensionAPI = {
 		settings?: FakeSettingsLike;
 		runSubprocess?: unknown;
 		getAgentDir?: () => string;
+		/** Coding-agent package VERSION export (`pi.pi.VERSION`). */
+		VERSION?: string;
 	};
 };
 
@@ -103,6 +105,11 @@ export type FakeRuntimeOptions = {
 	settings?: FakeSettingsLike;
 	/** Active profile agent dir exposed at `api.pi.getAgentDir()`. */
 	getAgentDir?: () => string;
+	/**
+	 * Host coding-agent VERSION exposed at `api.pi.VERSION`.
+	 * Defaults to 17.2.13 so green-gated init does not break unrelated runtime tests.
+	 */
+	version?: string | undefined;
 };
 
 export type FakeRuntime = {
@@ -118,6 +125,7 @@ export type FakeRuntime = {
 	setParentModel: (model: FakeModel | undefined) => void;
 	setSettings: (settings: FakeSettingsLike | undefined) => void;
 	setGetAgentDir: (getAgentDir: (() => string) | undefined) => void;
+	setVersion: (version: string | undefined) => void;
 	replaceEntries: (next: CustomSessionEntry[]) => void;
 	createContext: () => FakeCommandContext;
 	invokeCommand: (name: string, args?: string) => Promise<void>;
@@ -143,6 +151,8 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	let parentModel = options.parentModel;
 	let settings = options.settings;
 	let getAgentDir = options.getAgentDir;
+	// Default to the minimum supported OMP host so unrelated tests survive the VERSION gate.
+	let version: string | undefined = Object.hasOwn(options, "version") ? options.version : "17.2.13";
 	const cwd = options.cwd ?? process.cwd();
 
 	const createContext = (): FakeCommandContext => ({
@@ -209,6 +219,9 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			get getAgentDir() {
 				return getAgentDir;
 			},
+			get VERSION() {
+				return version;
+			},
 		},
 	};
 
@@ -240,6 +253,9 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		},
 		setGetAgentDir(next) {
 			getAgentDir = next;
+		},
+		setVersion(next) {
+			version = next;
 		},
 		replaceEntries(next) {
 			entries.splice(0, entries.length, ...next);
