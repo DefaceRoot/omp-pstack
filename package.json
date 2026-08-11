@@ -31,5 +31,13 @@
   "homepage": "https://github.com/DefaceRoot/omp-pstack#readme",
   "bugs": {
     "url": "https://github.com/DefaceRoot/omp-pstack/issues"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": ">=17.2.13"
+  },
+  "peerDependenciesMeta": {
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    }
   }
 }

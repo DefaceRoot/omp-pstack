@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, rmSync } from "node:fs";
 import {
+	createLiveConcurrencyLimiter,
 	executeAssignments,
 	expandAssignments,
 	type AssignmentRequest,
@@ -104,7 +105,11 @@ type ExtensionApi = {
 	};
 	pi?: {
 		runSubprocess?: RunSubprocessFn;
-		settings?: unknown;
+		settings?: {
+			get?: (key: string) => unknown;
+		};
+		getAgentDir?: () => string;
+		VERSION?: string;
 	};
 };
 
@@ -213,6 +218,41 @@ function parseAssignmentRequest(params: Record<string, unknown>): AssignmentRequ
 }
 
 const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const MIN_OMP_VERSION = [17, 2, 13] as const;
+const MIN_OMP_VERSION_TEXT = MIN_OMP_VERSION.join(".");
+const SEMVER_PATTERN =
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+function supportedOmpVersion(version: unknown): boolean {
+	if (typeof version !== "string") return false;
+	const match = SEMVER_PATTERN.exec(version);
+	if (!match) return false;
+	const prerelease = match[4];
+	if (
+		prerelease
+		&& prerelease.split(".").some(
+			(identifier) => /^\d+$/.test(identifier) && identifier.length > 1 && identifier.startsWith("0"),
+		)
+	) {
+		return false;
+	}
+
+	const actual = [Number(match[1]), Number(match[2]), Number(match[3])];
+	for (let index = 0; index < MIN_OMP_VERSION.length; index += 1) {
+		if (actual[index]! > MIN_OMP_VERSION[index]!) return true;
+		if (actual[index]! < MIN_OMP_VERSION[index]!) return false;
+	}
+	return prerelease === undefined;
+}
+
+function assertSupportedOmpVersion(version: unknown): void {
+	if (supportedOmpVersion(version)) return;
+	const received = typeof version === "string" ? JSON.stringify(version) : "missing VERSION";
+	throw new Error(
+		`omp-pstack requires OMP >=${MIN_OMP_VERSION_TEXT}; minimum pi.pi.VERSION is ${MIN_OMP_VERSION_TEXT} (received ${received}).`,
+	);
+}
+
 
 export function createPstackExtension(options: PstackExtensionOptions = {}): (pi: ExtensionApi) => void {
 	const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -223,6 +263,10 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		options.removeFile ?? options.filesystem?.removeFile ?? ((path) => rmSync(path));
 
 	return (pi: ExtensionApi): void => {
+		assertSupportedOmpVersion(pi.pi?.VERSION);
+		const scheduleAssignment = createLiveConcurrencyLimiter(
+			() => pi.pi?.settings?.get?.("task.maxConcurrency"),
+		);
 		let modeActive = false;
 
 		const loadDocument = async (relativePath: string): Promise<SkillDocument> =>
@@ -273,7 +317,11 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		pi.registerCommand("pstack-cleanup", {
 			description: "Remove the P-Stack model routing rule",
 			async handler(_args, ctx) {
-				const rulePath = join(homeDir, ".omp", "agent", "rules", MODEL_RULE_BASENAME);
+				const agentDir =
+					typeof pi.pi?.getAgentDir === "function"
+						? pi.pi.getAgentDir()
+						: join(homeDir, ".omp", "agent");
+				const rulePath = join(agentDir, "rules", MODEL_RULE_BASENAME);
 				const confirmed = await ctx.ui.confirm(
 					"Remove P-Stack model rule?",
 					`Delete only ${rulePath} (${MODEL_RULE_BASENAME})?`,
@@ -376,6 +424,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 					settings: pi.pi?.settings,
 					agentPrompt,
 					runtimeIdPrefix: `pstack-${toolCallId}`,
+					schedule: scheduleAssignment,
 					onProgress(progress) {
 						if (progress.state === "completed") {
 							asToolUpdate(onUpdate, `Completed ${progress.id} (exit ${progress.result?.exitCode ?? "?"}).`);

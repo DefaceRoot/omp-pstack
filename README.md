@@ -32,15 +32,21 @@ omp plugin list --json
 
 The result should include `@defaceroot/omp-pstack` as an enabled plugin. Restart OMP if the current session predates the installation.
 
+Requires OMP >=17.2.13 for runtime safety: `pstack_task` depends on strict structured-yield enforcement, MCP-safe child extension isolation (`enableMCP` + empty preloaded paths), live settings APIs, and active-profile getAgentDir.
+
 ## Use
 
 ### Configure model routing
 
-Run `/setup-pstack` in OMP. It reads the selectors available from `omp models --json`, lets you choose models for P-Stack roles, and asks before writing the generated routing rule at:
+Run `/setup-pstack` in OMP. It reads the selectors available from `omp models --json`, lets you choose models for P-Stack roles, and asks before writing the generated routing rule.
 
-```text
-~/.omp/agent/rules/pstack-models.md
-```
+Resolve the active agent_dir with `omp config path` (honors `--profile` / `OMP_PROFILE`).
+
+The generated model-routing rule is `<agent_dir>/rules/pstack-models.md`.
+
+`/setup-pstack` and `/pstack-cleanup` operate on the active OMP profile.
+
+The default-profile path `~/.omp/agent` is an example only, not universal.
 
 The rule is optional; omitted roles use OMP's automatic model selection. Re-running `/setup-pstack` validates the current choices and replaces the same generated file rather than appending another configuration.
 
@@ -80,7 +86,7 @@ The extension registers the native `pstack_task` tool for P-Stack workflows and 
 - `panel` runs one shared prompt against multiple model selectors.
 - `slice` runs distinct, independently described assignments concurrently.
 
-The tool launches OMP subprocess agents in the current working directory. Routed skills such as Poteto mode use the model choices from `~/.omp/agent/rules/pstack-models.md` when present and otherwise defer to OMP's automatic selection.
+The tool launches OMP subprocess agents in the current working directory. Routed skills such as Poteto mode use the model choices from `<agent_dir>/rules/pstack-models.md` when present and otherwise defer to OMP's automatic selection.
 
 ## Disable or remove
 
@@ -95,7 +101,7 @@ Disabling does not delete the generated model-routing rule or files created by P
 For a clean removal, perform these steps while the plugin is still enabled:
 
 1. In OMP, run `/pstack-cleanup`.
-2. Review the confirmation prompt. On confirmation, it deletes only `~/.omp/agent/rules/pstack-models.md`; declining leaves the file unchanged.
+2. Review the confirmation prompt. On confirmation, `/pstack-cleanup` deletes only `<agent_dir>/rules/pstack-models.md`; declining leaves the file unchanged.
 3. Uninstall the package:
 
    ```sh
@@ -113,7 +119,7 @@ omp plugin doctor
 rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"
 ```
 
-Uninstall removes package-owned assets shipped by the plugin, including its installed `src/`, `skills/`, `agents/`, `automations/`, documentation, and license files. It does not remove user-generated project artifacts: project files, worktrees, branches, reports, configuration, and other P-Stack outputs remain yours. `/pstack-cleanup` also does not remove those artifacts or the local checkout; when confirmed, it deletes only `~/.omp/agent/rules/pstack-models.md`, and declining leaves that file unchanged. If the plugin has already been uninstalled, inspect and remove that one generated rule manually if desired.
+Uninstall removes package-owned assets shipped by the plugin, including its installed `src/`, `skills/`, `agents/`, `automations/`, documentation, and license files. It does not remove user-generated project artifacts: project files, worktrees, branches, reports, configuration, and other P-Stack outputs remain yours. `/pstack-cleanup` also does not remove those artifacts or the local checkout; when confirmed, it deletes only `<agent_dir>/rules/pstack-models.md`, and declining leaves that file unchanged. If the plugin has already been uninstalled, resolve the active agent_dir with `omp config path`, then inspect and remove that one generated rule manually if desired.
 
 ## Upstream and licensing
 
