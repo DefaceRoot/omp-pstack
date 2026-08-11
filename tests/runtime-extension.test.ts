@@ -127,7 +127,10 @@ describe("omp-pstack runtime extension", () => {
 	});
 
 	test("extension initialization rejects pi.pi.VERSION below 17.2.13 with a clear minimum-version error", () => {
-		for (const version of ["17.2.12", "16.0.0", "17.2.12-beta.1", undefined] as const) {
+		// Semver prerelease of the exact floor is still < stable 17.2.13
+		// (17.2.13-beta.1 must reject). Assert public init behavior only —
+		// do not pin a suffix-stripping helper implementation.
+		for (const version of ["17.2.12", "16.0.0", "17.2.12-beta.1", "17.2.13-beta.1", undefined] as const) {
 			const isolated = createFakeRuntime({ cwd: packageRoot, version });
 			expect(() => loadExtension(isolated, { packageRoot, homeDir })).toThrow(
 				new RegExp(`minimum.*${MIN_OMP_CODING_AGENT_VERSION.replace(/\./g, "\\.")}|${MIN_OMP_CODING_AGENT_VERSION.replace(/\./g, "\\.")}.*minimum|VERSION.*${MIN_OMP_CODING_AGENT_VERSION.replace(/\./g, "\\.")}`, "i"),
@@ -138,7 +141,9 @@ describe("omp-pstack runtime extension", () => {
 	});
 
 	test("extension initialization proceeds when pi.pi.VERSION is 17.2.13 or newer", () => {
-		for (const version of ["17.2.13", "17.2.14", "18.0.0"] as const) {
+		// Stable floor accepted; a prerelease of a higher triple (17.2.14-beta.1)
+		// is semver-newer than 17.2.13 and may proceed.
+		for (const version of ["17.2.13", "17.2.14", "18.0.0", "17.2.14-beta.1"] as const) {
 			const isolated = createFakeRuntime({ cwd: packageRoot, version });
 			expect(() => loadExtension(isolated, { packageRoot, homeDir })).not.toThrow();
 			expect(isolated.commands.has("poteto-mode")).toBe(true);
