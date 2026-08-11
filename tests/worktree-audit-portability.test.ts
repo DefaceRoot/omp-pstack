@@ -11,7 +11,11 @@
  *     timestamp-read failure must be fail-closed / not-safe (not recent=no);
  *     matching session header read/jq parse failure and transcript find/
  *     traversal failure must also be fail-closed / not-safe (verify-recent-chat,
- *     unknown, or explicit nonzero failure).
+ *     unknown, or explicit nonzero failure);
+ *     ordinary non-transcript files under sessions must be ignored (only .jsonl
+ *     candidates are parsed) and must not poison an otherwise safe/review row;
+ *     a confirmed-absent sessions path means no transcripts, but an existing
+ *     non-directory or inaccessible/unsearchable sessions path must fail closed.
  *
  * No network, GitHub, or real user state.
  */
@@ -148,6 +152,23 @@ function writeMatchingTranscript(home: string, cwd: string): string {
 	return transcript;
 }
 
+
+function writeNonTranscriptSessionArtifacts(home: string): void {
+	const sessions = join(home, ".omp", "agent", "sessions");
+	mkdirSync(join(sessions, "notes-dir"), { recursive: true });
+	// Ordinary clutter under sessions: must never be treated as transcript
+	// candidates, or jq/header parse failures poison otherwise-safe rows.
+	writeFileSync(join(sessions, "debug.log"), "not a transcript\n", "utf8");
+	writeFileSync(join(sessions, "readme.md"), "# not a transcript\n", "utf8");
+	writeFileSync(join(sessions, "notes-dir", "scratch.txt"), "still noise\n", "utf8");
+}
+
+function writeSessionsAsNonDirectory(home: string): void {
+	const agent = join(home, ".omp", "agent");
+	mkdirSync(agent, { recursive: true });
+	writeFileSync(join(agent, "sessions"), "unexpected file, not a sessions directory\n", "utf8");
+}
+
 function runAudit(fixture: Fixture): AuditResult {
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
@@ -258,4 +279,37 @@ test("session transcript find/traversal failure is fail-closed / not-safe", () =
 	);
 
 	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
+});
+
+test("non-transcript session artifacts are ignored for an otherwise safe candidate", () => {
+	const fixture = createFixture({ merged: true });
+	writeNonTranscriptSessionArtifacts(fixture.home);
+
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+
+	// .log/.md/dir clutter is not a transcript. Parsing it must not flip an
+	// otherwise-safe merged candidate into verify-recent-chat/unknown.
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
+});
+
+test("existing non-directory sessions path is fail-closed / not-safe", () => {
+	const fixture = createFixture({ merged: true });
+	writeSessionsAsNonDirectory(fixture.home);
+
+	// Path exists but is not a directory: skipping discovery would fail open
+	// as "no transcripts" → safe. Absent path is the only no-transcript case.
+	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
+});
+
+test("confirmed-absent sessions path means no transcripts / stays safe when merged", () => {
+	const fixture = createFixture({ merged: true });
+	// Do not create ~/.omp/agent/sessions at all.
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
 });
