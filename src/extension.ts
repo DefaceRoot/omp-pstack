@@ -179,9 +179,18 @@ function resultTextKey(text: string): string {
 
 const SAFE_SLICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+const RESULT_LINE_OR_CONTROL = /\r\n|[\n\r\u2028\u2029\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+
 function frameResultLines(channel: "output" | "error" | "stderr", text: string): string {
 	const prefix = `  ${channel}: `;
-	return prefix + text.replace(/\r\n?|\n/g, `\n${prefix}`);
+	const framed = text.replace(RESULT_LINE_OR_CONTROL, (character) => {
+		const code = character.charCodeAt(0);
+		if (code === 0x0a || code === 0x0d || code === 0x2028 || code === 0x2029) {
+			return `\n${prefix}`;
+		}
+		return `\\u${code.toString(16).padStart(4, "0")}`;
+	});
+	return prefix + framed;
 }
 
 function activeModelSelector(ctx: CommandContext): string | undefined {
