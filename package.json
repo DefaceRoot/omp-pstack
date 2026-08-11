@@ -1,0 +1,35 @@
+{
+  "name": "@defaceroot/omp-pstack",
+  "version": "0.1.0",
+  "description": "Native Oh My Pi port of P-Stack",
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "files": [
+    "src",
+    "skills",
+    "agents",
+    "automations",
+    "docs",
+    "LICENSE",
+    "LICENSES",
+    "README.md"
+  ],
+  "omp": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "pstackPort": {
+    "upstreamVersion": "0.14.0",
+    "upstreamCommit": "6f7e183aa9f48805c38746705fe6a17d42cafb94"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DefaceRoot/omp-pstack.git"
+  },
+  "homepage": "https://github.com/DefaceRoot/omp-pstack#readme",
+  "bugs": {
+    "url": "https://github.com/DefaceRoot/omp-pstack/issues"
+  }
+}
