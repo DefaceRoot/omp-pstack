@@ -15,12 +15,15 @@
  *     ordinary non-transcript files under sessions must be ignored (only .jsonl
  *     candidates are parsed) and must not poison an otherwise safe/review row;
  *     a confirmed-absent sessions path means no transcripts, but an existing
- *     non-directory or inaccessible/unsearchable sessions path must fail closed.
+ *     non-directory or inaccessible/unsearchable sessions path must fail closed;
+ *     a valid sessions-root symlink to a directory that holds a matching recent
+ *     .jsonl must still be discovered (verify-recent-chat / not-safe), not skipped
+ *     by plain find -P traversal of the symlink root.
  *
  * No network, GitHub, or real user state.
  */
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -161,6 +164,37 @@ function writeNonTranscriptSessionArtifacts(home: string): void {
 	writeFileSync(join(sessions, "debug.log"), "not a transcript\n", "utf8");
 	writeFileSync(join(sessions, "readme.md"), "# not a transcript\n", "utf8");
 	writeFileSync(join(sessions, "notes-dir", "scratch.txt"), "still noise\n", "utf8");
+}
+
+
+function writeMatchingTranscriptViaSessionsSymlink(
+	home: string,
+	cwd: string,
+	root: string,
+): string {
+	const agent = join(home, ".omp", "agent");
+	mkdirSync(agent, { recursive: true });
+
+	// Real transcript directory lives outside the sessions path; sessions itself
+	// is only a symlink. Plain find -P accepts -d on the symlink but does not
+	// traverse into the target, which would miss recent chats and fail open.
+	const realSessions = join(root, "real-sessions");
+	const sessionDir = join(realSessions, "portability-session");
+	mkdirSync(sessionDir, { recursive: true });
+	const transcript = join(sessionDir, "session.jsonl");
+	writeFileSync(
+		transcript,
+		`${JSON.stringify({
+			type: "session",
+			version: 3,
+			id: "portability-session",
+			timestamp: "2026-08-11T12:00:00.000Z",
+			cwd,
+		})}\n`,
+		"utf8",
+	);
+	symlinkSync(realSessions, join(agent, "sessions"));
+	return transcript;
 }
 
 function writeSessionsAsNonDirectory(home: string): void {
@@ -312,4 +346,21 @@ test("confirmed-absent sessions path means no transcripts / stays safe when merg
 	const row = rowFor(result.rows, fixture.worktree);
 	expect(row.bucket).toBe("safe");
 	expect(row.lastChat).toBe("-");
+});
+
+test("sessions-root symlink with matching recent transcript is verify-recent-chat", () => {
+	const fixture = createFixture({ merged: true });
+	writeMatchingTranscriptViaSessionsSymlink(
+		fixture.home,
+		fixture.worktree,
+		fixture.root,
+	);
+
+	// -d succeeds on a directory symlink, but discovery that does not traverse
+	// the symlink root would miss the transcript and fail open as safe.
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
 });
