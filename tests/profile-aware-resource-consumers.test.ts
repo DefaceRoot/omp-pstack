@@ -25,6 +25,12 @@ import { join } from "node:path";
  * `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` when applicable, and
  * never reads default-profile sessions (`~/.omp/agent/sessions` or
  * `$XDG_DATA_HOME/omp/sessions`) under a named profile.
+ * Default-profile XDG: when `XDG_DATA_HOME` is explicitly set, the
+ * applicable omp data root already exists, and the normalized profile is
+ * default (unset / trimmed empty / literal `default`), also consider
+ * `$XDG_DATA_HOME/omp/sessions`. Named profiles use only the
+ * profile-matched root. Do not invent `$HOME/.local/share` when
+ * `XDG_DATA_HOME` is unset.
  * User-authored skill discovery/write/evidence uses `<agent_dir>/skills`
  * resolved the same way — never `~/.omp/agent/skills`. Project
  * `.omp/skills` and global plugin-installed paths remain valid where
@@ -86,11 +92,26 @@ const HARDCODED_DEFAULT_SESSIONS = "~/.omp/agent/sessions";
 const HARDCODED_DEFAULT_SKILLS = "~/.omp/agent/skills";
 
 /**
- * Default-profile XDG sessions root without a profile segment. Mentions of
- * `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` are the profile-matched
- * form and are allowed / required separately. Trailing `/` is still stale.
+ * Default-profile XDG sessions root (`$XDG_DATA_HOME/omp/sessions`). Required
+ * only when gated to an explicit `XDG_DATA_HOME`, an existing applicable omp
+ * root, and a normalized default profile — never under a named profile.
  */
-const DEFAULT_PROFILE_XDG_SESSIONS = /\$XDG_DATA_HOME\/omp\/sessions\b/g;
+const DEFAULT_PROFILE_XDG_SESSIONS = /\$XDG_DATA_HOME\/omp\/sessions\b/;
+
+/**
+ * Gated default-profile XDG use: `$XDG_DATA_HOME/omp/sessions` tied to
+ * XDG_DATA_HOME explicitly set, an applicable omp root that exists, and a
+ * normalized default profile (unset / trimmed empty / literal `default`).
+ */
+const DEFAULT_PROFILE_XDG_GATED =
+	/\$XDG_DATA_HOME\/omp\/sessions[\s\S]{0,500}(?:explicitly\s+set|XDG_DATA_HOME[\s\S]{0,80}set)[\s\S]{0,300}(?:omp(?:\s+data)?\s+root[\s\S]{0,80}exists|exists[\s\S]{0,80}omp(?:\s+data)?\s+root)[\s\S]{0,300}(?:default(?:\s+profile)?|unset|trimmed\s+empty|literal\s+`?default`?)|(?:explicitly\s+set|XDG_DATA_HOME[\s\S]{0,80}set)[\s\S]{0,300}(?:omp(?:\s+data)?\s+root[\s\S]{0,80}exists|exists[\s\S]{0,80}omp(?:\s+data)?\s+root)[\s\S]{0,300}(?:default(?:\s+profile)?|unset|trimmed\s+empty|literal\s+`?default`?)[\s\S]{0,300}\$XDG_DATA_HOME\/omp\/sessions|(?:default(?:\s+profile)?|unset|trimmed\s+empty|literal\s+`?default`?)[\s\S]{0,300}(?:explicitly\s+set|XDG_DATA_HOME[\s\S]{0,80}set)[\s\S]{0,300}(?:omp(?:\s+data)?\s+root[\s\S]{0,80}exists|exists[\s\S]{0,80}omp(?:\s+data)?\s+root)[\s\S]{0,300}\$XDG_DATA_HOME\/omp\/sessions|(?:default(?:\s+profile)?|unset|trimmed\s+empty|literal\s+`?default`?)[\s\S]{0,300}\$XDG_DATA_HOME\/omp\/sessions[\s\S]{0,300}(?:explicitly\s+set|XDG_DATA_HOME[\s\S]{0,80}set)[\s\S]{0,300}(?:omp(?:\s+data)?\s+root[\s\S]{0,80}exists|exists[\s\S]{0,80}omp(?:\s+data)?\s+root)/i;
+
+/**
+ * Invented platform XDG fallback when `XDG_DATA_HOME` is unset — forbidden.
+ * OMP only adopts XDG when the env var is explicitly set.
+ */
+const INVENTED_XDG_FALLBACK =
+	/\$HOME\/\.local\/share|~\/\.local\/share|platform XDG data default|XDG data default when (?:the )?(?:variable|XDG_DATA_HOME) is unset|using the platform XDG(?: data)? default when (?:the )?variable is unset/i;
 
 /** Prefer an explicit current session / history / agent handoff path. */
 const PREFER_EXPLICIT_SESSION_OR_HISTORY =
@@ -135,12 +156,8 @@ function readConsumer(relativePath: string): string {
 	return readFileSync(absolute, "utf8");
 }
 
-function defaultProfileXdgSessionMentions(body: string): string[] {
-	return [...body.matchAll(DEFAULT_PROFILE_XDG_SESSIONS)].map((m) => m[0]);
-}
-
 describe("profile-aware transcript and user-skill consumer contracts", () => {
-	test("every transcript consumer prefers explicit session/history paths, resolves filesystem fallback via omp config path + profile-matched XDG, and forbids default-profile session roots", () => {
+	test("every transcript consumer prefers explicit session/history paths, resolves filesystem fallback via omp config path + profile-matched XDG, and forbids hardcoded default session roots", () => {
 		const violations: string[] = [];
 
 		for (const relativePath of TRANSCRIPT_CONSUMERS) {
@@ -149,13 +166,6 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 			if (body.includes(HARDCODED_DEFAULT_SESSIONS)) {
 				violations.push(
 					`${relativePath}: still mentions ${HARDCODED_DEFAULT_SESSIONS}`,
-				);
-			}
-
-			const defaultXdg = defaultProfileXdgSessionMentions(body);
-			if (defaultXdg.length > 0) {
-				violations.push(
-					`${relativePath}: still mentions default-profile XDG sessions root (${defaultXdg.join(", ")}); use profile-matched omp/profiles/<profile>/sessions when applicable`,
 				);
 			}
 
@@ -186,6 +196,60 @@ describe("profile-aware transcript and user-skill consumer contracts", () => {
 			if (!NO_DEFAULT_PROFILE_SESSION_LEAK.test(body)) {
 				violations.push(
 					`${relativePath}: must say named-profile discovery never reads default-profile sessions`,
+				);
+			}
+		}
+
+		expect(violations).toEqual([]);
+	});
+
+	test("every transcript consumer gates default-profile $XDG_DATA_HOME/omp/sessions, keeps named profiles on the profile-matched root only, and forbids invented ~/.local/share fallbacks", () => {
+		const violations: string[] = [];
+
+		for (const relativePath of TRANSCRIPT_CONSUMERS) {
+			const body = readConsumer(relativePath);
+
+			// Preserve active agent_dir + no profile leakage while tightening
+			// default-profile XDG semantics.
+			if (!AGENT_DIR_VIA_OMP_CONFIG_PATH.test(body)) {
+				violations.push(
+					`${relativePath}: must still resolve active agent_dir via \`omp config path\``,
+				);
+			}
+
+			if (!AGENT_DIR_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: must still search <agent_dir>/sessions`,
+				);
+			}
+
+			if (!PROFILE_MATCHED_XDG_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: named profiles must use only profile-matched \`$XDG_DATA_HOME/omp/profiles/<profile>/sessions\``,
+				);
+			}
+
+			if (!NO_DEFAULT_PROFILE_SESSION_LEAK.test(body)) {
+				violations.push(
+					`${relativePath}: named-profile discovery must never read default-profile sessions`,
+				);
+			}
+
+			if (!DEFAULT_PROFILE_XDG_SESSIONS.test(body)) {
+				violations.push(
+					`${relativePath}: must also consider \`$XDG_DATA_HOME/omp/sessions\` for the default profile`,
+				);
+			}
+
+			if (!DEFAULT_PROFILE_XDG_GATED.test(body)) {
+				violations.push(
+					`${relativePath}: \`$XDG_DATA_HOME/omp/sessions\` must be gated to XDG_DATA_HOME explicitly set, applicable omp root exists, and normalized profile default (unset / trimmed empty / literal \`default\`)`,
+				);
+			}
+
+			if (INVENTED_XDG_FALLBACK.test(body)) {
+				violations.push(
+					`${relativePath}: must not invent \`$HOME/.local/share\` / platform XDG defaults when XDG_DATA_HOME is unset`,
 				);
 			}
 		}
