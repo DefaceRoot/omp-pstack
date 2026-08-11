@@ -8,7 +8,10 @@
  *   - worktree-cleanup playbook buckets (verify-recent-chat vs safe)
  *   - OMP session header shape: {"type":"session",...,"cwd":"<path>"}
  *   - acceptance: recent matching transcript must be detected on GNU/Linux;
- *     timestamp-read failure must be fail-closed / not-safe (not recent=no).
+ *     timestamp-read failure must be fail-closed / not-safe (not recent=no);
+ *     matching session header read/jq parse failure and transcript find/
+ *     traversal failure must also be fail-closed / not-safe (verify-recent-chat,
+ *     unknown, or explicit nonzero failure).
  *
  * No network, GitHub, or real user state.
  */
@@ -24,6 +27,7 @@ const AUDIT_SCRIPT = join(
 );
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const FAIL_CLOSED_BUCKETS = new Set(["verify-recent-chat", "unknown"]);
 
 type AuditRow = {
 	lastChat: string;
@@ -37,6 +41,13 @@ type Fixture = {
 	repo: string;
 	worktree: string;
 	bin: string;
+};
+
+type AuditResult = {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	rows: AuditRow[];
 };
 
 const fixtures: string[] = [];
@@ -137,9 +148,7 @@ function writeMatchingTranscript(home: string, cwd: string): string {
 	return transcript;
 }
 
-function runAudit(
-	fixture: Fixture,
-): { stdout: string; stderr: string; rows: AuditRow[] } {
+function runAudit(fixture: Fixture): AuditResult {
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		HOME: fixture.home,
@@ -158,11 +167,7 @@ function runAudit(
 
 	const stdout = result.stdout.toString();
 	const stderr = result.stderr.toString();
-	if (result.exitCode !== 0) {
-		throw new Error(
-			`worktree-audit.sh exited ${result.exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-		);
-	}
+	const exitCode = result.exitCode ?? 1;
 
 	const rows = stdout
 		.trimEnd()
@@ -178,7 +183,7 @@ function runAudit(
 			};
 		});
 
-	return { stdout, stderr, rows };
+	return { exitCode, stdout, stderr, rows };
 }
 
 function rowFor(rows: AuditRow[], worktree: string): AuditRow {
@@ -187,12 +192,25 @@ function rowFor(rows: AuditRow[], worktree: string): AuditRow {
 	return row as AuditRow;
 }
 
+/** Fail-closed: explicit nonzero exit, or not-safe verify-recent-chat/unknown. */
+function expectFailClosedNotSafe(result: AuditResult, worktree: string): void {
+	if (result.exitCode !== 0) {
+		expect(result.exitCode).not.toBe(0);
+		return;
+	}
+
+	const row = rowFor(result.rows, worktree);
+	expect(row.bucket).not.toBe("safe");
+	expect(FAIL_CLOSED_BUCKETS.has(row.bucket)).toBe(true);
+}
+
 test("recent matching transcript on GNU/Linux is detected as verify-recent-chat", () => {
 	const fixture = createFixture({ merged: false });
 	writeMatchingTranscript(fixture.home, fixture.worktree);
 
-	const { rows } = runAudit(fixture);
-	const row = rowFor(rows, fixture.worktree);
+	const result = runAudit(fixture);
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
 
 	expect(row.bucket).toBe("verify-recent-chat");
 	expect(row.lastChat).toMatch(DATE_RE);
@@ -210,9 +228,34 @@ test("timestamp-read failure is fail-closed / not-safe rather than recent=no", (
 		"#!/bin/sh\necho 'stat: forced timestamp-read failure' >&2\nexit 1\n",
 	);
 
-	const { rows } = runAudit(fixture);
-	const row = rowFor(rows, fixture.worktree);
+	const result = runAudit(fixture);
+	expectFailClosedNotSafe(result, fixture.worktree);
+});
 
-	expect(row.bucket).not.toBe("safe");
-	expect(row.bucket).toBe("verify-recent-chat");
+test("matching session header jq parse failure is fail-closed / not-safe", () => {
+	const fixture = createFixture({ merged: true });
+	writeMatchingTranscript(fixture.home, fixture.worktree);
+
+	// Matching session header is present, but jq is unavailable/nonzero.
+	// Swallowing that as "no transcript" is fail-open for a merged worktree.
+	writeExecutable(
+		join(fixture.bin, "jq"),
+		"#!/bin/sh\necho 'jq: forced unavailable/nonzero' >&2\nexit 2\n",
+	);
+
+	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
+});
+
+test("session transcript find/traversal failure is fail-closed / not-safe", () => {
+	const fixture = createFixture({ merged: true });
+	writeMatchingTranscript(fixture.home, fixture.worktree);
+
+	// Sessions exist for the candidate cwd, but discovery/traversal fails.
+	// Treating that as recent=no would incorrectly mark a merged tree safe.
+	writeExecutable(
+		join(fixture.bin, "find"),
+		"#!/bin/sh\necho 'find: forced traversal failure' >&2\nexit 1\n",
+	);
+
+	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
 });
