@@ -16,6 +16,15 @@ import { join } from "node:path";
  * only via the OMP-generated enable command, never hand-authored registry JSON.
  * FOR_AGENTS.md is an active agent entrypoint and must not teach runnable
  * copy/enable/list/automate/editor bootstrap.
+ *
+ * Worktree cleanup safety (worktree-cleanup.md): any tracked, untracked, or
+ * ignored content needs exact paths and sizes shown plus explicit user
+ * confirmation; never call untracked/ignored "throwaway" or disposable. Only
+ * clean + merged + no-open-PR + not-in-use worktrees may auto-proceed. Default
+ * removal is ordinary `git worktree remove -- <path>` with proper quoting; on
+ * refuse or state change, stop and rerun audit / show current contents. Forbid
+ * default `git worktree remove --force` and `rm -rf`; force only after a
+ * separate fresh status and explicit destructive confirmation for exact paths.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -50,6 +59,40 @@ const OMP_PLUGIN_ENABLE =
 
 /** Backticked `orch <subcommand...>` examples; bare alias gloss `orch` is ignored. */
 const ORCH_INVOCATION = /`orch\s+([^`]+)`/g;
+
+/** Untracked/ignored/scratch must never be framed as throwaway, disposable, or safe to drop. */
+const SCRATCH_THROWAWAY_OR_SAFE_DROP =
+	/(?:scratch|untracked|ignored)[\s\S]{0,120}(?:throwaway|disposable|safe to drop)|(?:throwaway|disposable|safe to drop)[\s\S]{0,120}(?:scratch|untracked|ignored)/i;
+
+/** Tracked/untracked/ignored (or wip/scratch) content needs exact paths, sizes, and confirmation. */
+const EXACT_PATHS_SIZES_AND_CONFIRMATION =
+	/(?:tracked|untracked|ignored|wip|scratch)[\s\S]{0,220}(?:exact paths?|paths?)[\s\S]{0,40}sizes?[\s\S]{0,160}(?:explicit )?(?:user )?confirmation|(?:exact paths?[\s\S]{0,40}sizes?|paths? and sizes?)[\s\S]{0,200}(?:explicit )?(?:user )?confirmation/i;
+
+/** Auto-proceed only for clean + merged + no-open-PR + not-in-use. */
+const AUTO_PROCEED_CLEAN_MERGED_NO_OPEN_PR_NOT_IN_USE =
+	/clean[\s\S]{0,60}merged[\s\S]{0,60}(?:no[- ]open[- ]PR|no open PR)[\s\S]{0,60}(?:not[- ]in[- ]use|not in use)|(?:auto-proceed|proceeds?)[\s\S]{0,140}clean[\s\S]{0,80}merged[\s\S]{0,80}(?:no[- ]open[- ]PR|no open PR)[\s\S]{0,80}(?:not[- ]in[- ]use|not in use)/i;
+
+/** Ordinary default remove uses end-of-options `--` before the path. */
+const ORDINARY_WORKTREE_REMOVE = /git worktree remove -- /;
+
+/** Paths in remove commands must be quoted / quoting called out. */
+const PATH_QUOTING =
+	/quot(?:e|ed|ing)[\s\S]{0,80}(?:path|worktree)|(?:path|worktree)[\s\S]{0,80}quot(?:e|ed|ing)|proper quot(?:e|ing)/i;
+
+/** Default prune recipe must not prescribe `--force`. */
+const DEFAULT_FORCE_REMOVE =
+	/(?:Per path|Prune the confirmed set|confirmed set)[\s\S]{0,100}git worktree remove --force/i;
+
+/** `rm -rf` is never the cleanup tool. */
+const RM_RF = /\brm\s+-rf\b/;
+
+/** On refuse or state change: stop and rerun audit / show current contents. */
+const REFUSE_OR_STATE_CHANGE_STOP_RERUN =
+	/(?:refus(?:e|es|ed)|state chang(?:e|ed))[\s\S]{0,180}(?:stop|rerun(?:\s+the)?\s+audit|show(?:\s+current)?\s+contents)|(?:stop[\s\S]{0,80}(?:rerun(?:\s+the)?\s+audit|show(?:\s+current)?\s+contents)|rerun(?:\s+the)?\s+audit)[\s\S]{0,180}(?:refus(?:e|es|ed)|state chang(?:e|ed))/i;
+
+/** Force only after separate fresh status + explicit destructive confirmation for exact paths. */
+const FORCE_AFTER_FRESH_STATUS_AND_DESTRUCTIVE_CONFIRMATION =
+	/(?:fresh (?:git )?status|separate fresh status)[\s\S]{0,160}(?:explicit )?(?:destructive )?confirmation[\s\S]{0,120}exact paths?|(?:--force|force)[\s\S]{0,200}(?:fresh (?:git )?status|separate fresh status)[\s\S]{0,160}(?:explicit )?(?:destructive )?confirmation[\s\S]{0,80}exact paths?/i;
 
 function readSeam(path: string): string {
 	expect(existsSync(path)).toBe(true);
@@ -94,6 +137,55 @@ describe("pstack native guidance content contracts", () => {
 		expect(body).not.toMatch(
 			/Application Support\/Cursor|state\.vscdb|snapshots\/roots/i,
 		);
+	});
+
+	test("worktree cleanup pins scratch-safe gates, ordinary remove, and gated force", () => {
+		const body = readSeam(WORKTREE_CLEANUP);
+		const violations: string[] = [];
+
+		if (SCRATCH_THROWAWAY_OR_SAFE_DROP.test(body)) {
+			violations.push(
+				"frames scratch/untracked/ignored as throwaway, disposable, or safe to drop",
+			);
+		}
+		if (!EXACT_PATHS_SIZES_AND_CONFIRMATION.test(body)) {
+			violations.push(
+				"missing exact paths + sizes + explicit confirmation for tracked/untracked/ignored content",
+			);
+		}
+		if (!AUTO_PROCEED_CLEAN_MERGED_NO_OPEN_PR_NOT_IN_USE.test(body)) {
+			violations.push(
+				"auto-proceed must require clean + merged + no-open-PR + not-in-use",
+			);
+		}
+		if (!ORDINARY_WORKTREE_REMOVE.test(body)) {
+			violations.push(
+				"missing ordinary default `git worktree remove -- <path>`",
+			);
+		}
+		if (!PATH_QUOTING.test(body)) {
+			violations.push("missing path quoting guidance for worktree remove");
+		}
+		if (DEFAULT_FORCE_REMOVE.test(body)) {
+			violations.push(
+				"default prune still prescribes `git worktree remove --force`",
+			);
+		}
+		if (RM_RF.test(body)) {
+			violations.push("cleanup still teaches `rm -rf`");
+		}
+		if (!REFUSE_OR_STATE_CHANGE_STOP_RERUN.test(body)) {
+			violations.push(
+				"missing stop + rerun audit / show contents when remove refuses or state changed",
+			);
+		}
+		if (!FORCE_AFTER_FRESH_STATUS_AND_DESTRUCTIVE_CONFIRMATION.test(body)) {
+			violations.push(
+				"force is not gated behind fresh status + explicit destructive confirmation for exact paths",
+			);
+		}
+
+		expect(violations).toEqual([]);
 	});
 
 	test("benny stays dormant without a native scheduler, enables pstack only via OMP, and does not hand-author registry JSON or runnable Cursor automate/editor steps", () => {
