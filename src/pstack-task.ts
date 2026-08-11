@@ -46,7 +46,6 @@ export type RunSubprocessOptions = {
 		description: string;
 		systemPrompt: string;
 		source: "project";
-		tools: string[];
 		spawns: [];
 	};
 	enableLsp?: boolean;
@@ -189,14 +188,12 @@ function failedResult(id: string, error: unknown): AssignmentResult {
 
 const TERMINAL_YIELD_INSTRUCTION =
 	"Finish by calling terminal `yield` with non-null `result.data` text. A data-less or type-only yield is forbidden.";
-const BUILT_IN_CHILD_TOOLS = ["read", "bash", "grep", "glob", "edit", "write"] as const;
 
 const FALLBACK_AGENT: AgentDefinition = {
 	name: "poteto-agent",
 	description: "P-Stack parallel worker",
 	systemPrompt: `Complete the assigned task thoroughly and return the result.\n\n${TERMINAL_YIELD_INSTRUCTION}`,
 	source: "project",
-	tools: [...BUILT_IN_CHILD_TOOLS],
 	spawns: [],
 };
 
