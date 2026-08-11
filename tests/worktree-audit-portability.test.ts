@@ -29,7 +29,15 @@
  * No network, GitHub, or real user state.
  */
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -380,14 +388,32 @@ test("matching session header jq parse failure is fail-closed / not-safe", () =>
 	const fixture = createFixture({ merged: true });
 	writeMatchingTranscript(fixture.home, fixture.worktree);
 
-	// Matching session header is present, but jq is unavailable/nonzero.
-	// Swallowing that as "no transcript" is fail-open for a merged worktree.
+	// Matching session header is present, but the later header-cwd jq query
+	// fails. A blanket jq failure would trip the earlier PR-array validation
+	// instead, so keep that path succeeding and only fail the session-header
+	// extract — recording a fixture-local marker so a never-attempted header
+	// parse cannot pass. Swallowing header failure as "no transcript" is
+	// fail-open for a merged worktree.
+	const marker = join(fixture.root, "jq-session-header-parse-failed");
 	writeExecutable(
 		join(fixture.bin, "jq"),
-		"#!/bin/sh\necho 'jq: forced unavailable/nonzero' >&2\nexit 2\n",
+		`#!/bin/sh
+for arg in "$@"; do
+	case "$arg" in
+		*'select(.type == "session")'*)
+			: > "${marker}"
+			echo 'jq: forced session-header parse failure' >&2
+			exit 2
+			;;
+	esac
+done
+exit 0
+`,
 	);
 
-	expectFailClosedNotSafe(runAudit(fixture), fixture.worktree);
+	const result = runAudit(fixture);
+	expect(existsSync(marker)).toBe(true);
+	expectFailClosedNotSafe(result, fixture.worktree);
 });
 
 test("session transcript find/traversal failure is fail-closed / not-safe", () => {
