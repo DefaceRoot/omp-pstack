@@ -167,6 +167,16 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function nonemptyResultText(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const text = value.trim();
+	return text === "" ? undefined : text;
+}
+
+function resultTextKey(text: string): string {
+	return text.replace(/\s+/g, " ");
+}
+
 function activeModelSelector(ctx: CommandContext): string | undefined {
 	const model = ctx.model ?? ctx.models?.current?.();
 	if (!model?.provider || !model.id) return undefined;
@@ -433,11 +443,23 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 				});
 				const text = results
 					.map((result, index) => {
-						const workerText = [result.output, result.error, result.stderr].find(
-							(value) => typeof value === "string" && value.trim() !== "",
-						);
 						const logicalId = assignments[index]?.id ?? result.id;
-						return `${logicalId}: exit ${result.exitCode}${workerText ? `\n${workerText}` : ""}`;
+						let rendered = `${logicalId}: exit ${result.exitCode}`;
+						const output = nonemptyResultText(result.output);
+						const outputKey = output === undefined ? undefined : resultTextKey(output);
+						if (output !== undefined) rendered += `\n${output}`;
+						if (result.exitCode === 0) return rendered;
+
+						const error = nonemptyResultText(result.error);
+						const errorKey = error === undefined ? undefined : resultTextKey(error);
+						if (error !== undefined && errorKey !== outputKey) rendered += `\nerror: ${error}`;
+
+						const stderr = nonemptyResultText(result.stderr);
+						const stderrKey = stderr === undefined ? undefined : resultTextKey(stderr);
+						if (stderr !== undefined && stderrKey !== outputKey && stderrKey !== errorKey) {
+							rendered += `\nstderr: ${stderr}`;
+						}
+						return rendered;
 					})
 					.join("\n");
 				return {
