@@ -173,6 +173,9 @@ export async function executeAssignments(
 					agent,
 					enableLsp: false,
 				});
+				if (result.id !== assignment.id) {
+					result = { ...result, runtimeId: result.id, id: assignment.id };
+				}
 			} catch (error) {
 				result = options.signal?.aborted ? cancelledResult(assignment.id) : failedResult(assignment.id, error);
 			}
