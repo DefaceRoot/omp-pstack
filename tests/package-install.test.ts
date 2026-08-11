@@ -81,12 +81,18 @@ const TEAM_KIT_EXAMPLE_LINES = [
 ] as const;
 
 /**
- * Exact current remote/local removal contract clause from README.
- * Affirmative managed-copy removal + local registration/link removal with
- * explicit non-deletion of the user-owned checkout are pinned by wording.
+ * OMP 17.2.13 uninstall contract (PluginManager.link leaves a node_modules
+ * symlink with no package dependency; bun uninstall exits 0 but may leave it).
+ * Pin exact wording after whitespace normalization only.
  */
-const REQUIRED_REMOVAL_CLAUSE =
-	"For a GitHub remote install, uninstall removes OMP's managed installed copy. For a local-link install from a local checkout, uninstall removes only OMP's plugin registration/link; it never deletes the user-owned checkout or working tree.";
+const REQUIRED_REMOTE_UNINSTALL_CLAUSE =
+	"For a recommended GitHub remote install, uninstall removes OMP's managed installed copy cleanly.";
+const REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE =
+	"For a local-link install from a local checkout, uninstall removes OMP plugin registration but may leave the OMP node_modules symlink; it always preserves the user-owned checkout or working tree.";
+const REQUIRED_STALE_SYMLINK_CLEANUP_CLAUSE =
+	"After uninstall, run `omp plugin doctor` to obtain plugins_directory. If the stale symlink remains, manually remove only `<plugins_directory>/node_modules/@defaceroot/omp-pstack`.";
+const STALE_SYMLINK_PATH =
+	"<plugins_directory>/node_modules/@defaceroot/omp-pstack";
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
@@ -251,14 +257,27 @@ test("README polarity-binds cleanup to the generated model rule and preserves us
 	);
 });
 
-test("README pins the exact remote/local uninstall removal clause", () => {
+test("README pins OMP 17.2.13 remote/local uninstall and stale symlink cleanup", () => {
 	const readme = readReadme();
+	const normalized = normalizeWhitespace(readme);
+	const lines = fencedExampleLines(readme);
 
-	// Exact combined clause — wording pins affirmative/negative semantics.
-	// Whitespace normalize only; placeholder/negator paraphrases cannot pass.
-	expect(normalizeWhitespace(readme)).toContain(
-		normalizeWhitespace(REQUIRED_REMOVAL_CLAUSE),
+	// Replace the previous false combined clause: remote managed copy is removed
+	// cleanly, while local-link uninstall may leave the node_modules symlink.
+	expect(normalized).toContain(
+		normalizeWhitespace(REQUIRED_REMOTE_UNINSTALL_CLAUSE),
 	);
+	expect(normalized).toContain(
+		normalizeWhitespace(REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE),
+	);
+	expect(normalized).toContain(
+		normalizeWhitespace(REQUIRED_STALE_SYMLINK_CLEANUP_CLAUSE),
+	);
+
+	// Doctor discovers plugins_directory; only the stale scoped symlink is removed.
+	expect(lines).toContain("omp plugin doctor");
+	expect(normalized).toContain("plugins_directory");
+	expect(normalized).toContain(normalizeWhitespace(STALE_SYMLINK_PATH));
 });
 
 test("README links canonical upstream sources and root licensing retains separate Lauren Tan and Cursor notices", () => {
