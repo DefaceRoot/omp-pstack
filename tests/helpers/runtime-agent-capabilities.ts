@@ -9,15 +9,17 @@
  * - When `agent.tools` is omitted (or empty), executor leaves toolNames unset so the
  *   standard OMP built-in surface remains available (todo, web_search, browser, ask,
  *   inspect_image, …). A nonempty six-tool whitelist silently drops those.
+ * - When `agent.spawns !== undefined` (including `spawns: []`), executor.ts auto-adds
+ *   active `task` whenever a tools whitelist is present. Omitting `spawns` maps to
+ *   empty `spawnsEnv` without activating `task`. Prefer both `tools` and `spawns`
+ *   omitted to keep standard built-ins without recursive native delegation.
  * - `restrictToolNames: true` disables MCP (`enableMCP = !restrictToolNames && …`) and
  *   clears preloaded extension/custom-tool paths. Why/Reflect need child MCP, so
  *   pstack_task must keep `enableMCP: true`, pass empty preload arrays to block
  *   recursive extension reload, and leave `restrictToolNames` omitted/not-true.
  * - Yield contract: `src/tools/yield.ts` — success needs non-null `result.data`.
  *
- * Prefer omitting `agent.tools`. Only if an explicit list is required, it must at
- * minimum include `todo` and `web_search`, exclude recursive launchers (`task`,
- * `pstack_task`), and keep `spawns: []` so native delegation cannot spawn.
+ * Require omitting both `agent.tools` and `agent.spawns`.
  */
 export type AgentCapabilitySnapshot = {
 	tools?: unknown;
@@ -33,24 +35,18 @@ export type ChildRunnerPolicySnapshot = {
 };
 
 /**
- * Prefer omitted `agent.tools` (standard OMP built-ins remain available). An
- * explicit list is accepted only when it includes at least `todo` + `web_search`
- * and excludes recursive launchers. Always require empty `spawns`.
+ * Require omitted `agent.tools` (standard OMP built-ins remain available) AND
+ * omitted `agent.spawns` (avoids executor auto-adding recursive `task` when
+ * `spawns !== undefined`, including empty arrays).
  */
 export function preservesStandardNativeToolsWithoutRecursion(
 	agent: AgentCapabilitySnapshot | null | undefined,
 ): boolean {
 	if (!agent) return false;
-	if (!Array.isArray(agent.spawns) || agent.spawns.length !== 0) return false;
-
-	// Preferred: omit tools so OMP keeps the full standard built-in surface.
-	if (agent.tools === undefined) return true;
-
-	// Explicit-list fallback only (public API does not require a whitelist).
-	if (!Array.isArray(agent.tools) || agent.tools.length === 0) return false;
-	if (!agent.tools.every((tool) => typeof tool === "string" && tool.trim() !== "")) return false;
-	if (agent.tools.includes("task") || agent.tools.includes("pstack_task")) return false;
-	if (!agent.tools.includes("todo") || !agent.tools.includes("web_search")) return false;
+	// Both must be omitted: tools whitelist drops standard built-ins; spawns:[]
+	// still counts as defined and auto-adds task when a tools list is present.
+	if (agent.tools !== undefined) return false;
+	if (agent.spawns !== undefined) return false;
 	return true;
 }
 
