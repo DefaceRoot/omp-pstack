@@ -11,8 +11,11 @@
  *     <agent_dir>/sessions); applicable named-profile XDG data root
  *     $XDG_DATA_HOME/omp/profiles/<profile>/sessions (OMP_PROFILE canonical,
  *     PI_PROFILE fallback) without default-profile leakage; the explicit
- *     OMP/PI sentinel `default` uses $XDG_DATA_HOME/omp/sessions (not
- *     .../profiles/default/sessions); omp config path failure is fail-closed
+ *     OMP/PI sentinel `default` (and explicit empty OMP_PROFILE, which still
+ *     beats PI_PROFILE) uses $XDG_DATA_HOME/omp/sessions (not
+ *     .../profiles/default/sessions); profile names must pass the usual
+ *     [A-Za-z0-9][A-Za-z0-9_.-]* validation or fail closed; omp config path
+ *     failure is fail-closed
  *   - acceptance: recent matching transcript must be detected on GNU/Linux;
  *     timestamp-read failure must be fail-closed / not-safe (not recent=no);
  *     matching session header read/jq parse failure and transcript find/
@@ -47,8 +50,9 @@
  *     inspect signals per the cleanup playbook, never prune permission);
  *     open-PR completeness must exhaust a paginated all-authors open-PR API:
  *     a matching branch only on page 2 authored by someone else must hold as
- *     hold-open-pr — the bounded `gh pr list --author @me --limit 1000` miss
- *     is fail-open for shared branches.
+ *     hold-open-pr after every page is consumed, without `--author @me` or a
+ *     bounded `--limit 1000` — today's author-scoped miss is fail-open for
+ *     shared branches.
  *
  * No network, GitHub, or real user state. Fixtures never inspect real sessions.
  */
@@ -58,6 +62,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -876,6 +881,7 @@ test("OMP_PROFILE=default uses default XDG sessions root not profiles/default", 
 	// Current fallthrough uses .../profiles/default/sessions and fails open.
 	expect(row.bucket).toBe("verify-recent-chat");
 	expect(row.lastChat).toMatch(DATE_RE);
+	expect(row.bucket).not.toBe("safe");
 });
 
 test("PI_PROFILE=default fallback uses default XDG sessions root not profiles/default", () => {
@@ -906,14 +912,16 @@ test("PI_PROFILE=default fallback uses default XDG sessions root not profiles/de
 	const row = rowFor(result.rows, fixture.worktree);
 	expect(row.bucket).toBe("verify-recent-chat");
 	expect(row.lastChat).toMatch(DATE_RE);
+	expect(row.bucket).not.toBe("safe");
 });
 
 test("paginated other-author open PR on page 2 holds open", () => {
 	const fixture = createFixture({ merged: true });
 	const page1 = join(fixture.root, "gh-open-prs-page-1.json");
 	const page2 = join(fixture.root, "gh-open-prs-page-2.json");
-	const boundedHits = join(fixture.root, "gh-bounded-author-hits");
+	const boundedHits = join(fixture.root, "gh-bounded-author-or-limit-hits");
 	const paginatedPages = join(fixture.root, "gh-paginated-pages");
+	const ghLog = join(fixture.root, "gh-invocations.log");
 
 	// Independent source of truth: matching OPEN PR is authored by someone else
 	// and lives only on page 2 of the all-open listing. Page 1 is filler only.
@@ -942,19 +950,26 @@ test("paginated other-author open PR on page 2 holds open", () => {
 		"utf8",
 	);
 
-	// Stub: bounded --author @me / --limit 1000 returns empty (today's call).
+	// Stub: today's bounded author=@me / --limit 1000 returns empty.
 	// Paginated all-open API serves page 1 then page 2; --paginate concatenates.
+	// Keep the stub dash-safe (no case patterns with escaped spaces).
 	writeExecutable(
 		join(fixture.bin, "gh"),
 		`#!/bin/sh
+printf '%s\n' "$*" >> "${ghLog}"
 args="$*"
+bounded=no
 case "$args" in
-	*--author*|*@me*)
-		echo 1 >> "${boundedHits}"
-		echo '[]'
-		exit 0
-		;;
+	*--author*|*@me*|*--limit=1000*) bounded=yes ;;
 esac
+case " $args " in
+	*" --limit 1000 "*) bounded=yes ;;
+esac
+if [ "$bounded" = yes ]; then
+	echo 1 >> "${boundedHits}"
+	echo '[]'
+	exit 0
+fi
 
 # Paginated all-open pulls (future completeness path).
 case "$args" in
@@ -965,7 +980,7 @@ case "$args" in
 		jq -s 'add' "${page1}" "${page2}"
 		exit $?
 		;;
-	*page=2*|*page%3D2*|*page=2\\&*|*\\&page=2*)
+	*page=2*|*page%3D2*)
 		echo 2 >> "${paginatedPages}"
 		cat "${page2}"
 		exit 0
@@ -986,8 +1001,105 @@ exit 1
 	expect(result.exitCode).toBe(0);
 	const row = rowFor(result.rows, fixture.worktree);
 
-	// Must discover the page-2 other-author OPEN PR and hold — not miss via
-	// author=@me --limit 1000 and fail open as safe/pr=-.
+	// Exhaust every page via the all-author path — never author=@me / --limit 1000.
+	expect(existsSync(boundedHits)).toBe(false);
+	expect(readFileSync(paginatedPages, "utf8").trim().split("\n")).toEqual([
+		"1",
+		"2",
+	]);
+	const ghInvocations = existsSync(ghLog)
+		? readFileSync(ghLog, "utf8")
+		: "";
+	expect(ghInvocations).not.toMatch(/--author/);
+	expect(ghInvocations).not.toMatch(/@me/);
+	expect(ghInvocations).not.toMatch(/--limit[= ]1000/);
+
+	// Must discover the page-2 other-author OPEN PR and hold — not miss and
+	// fail open as safe/pr=-.
 	expect(row.pr).toMatch(/#42\/OPEN/);
 	expect(row.bucket).toBe("hold-open-pr");
+	expect(row.bucket).not.toBe("safe");
+});
+
+test("explicit empty OMP_PROFILE beats PI_PROFILE and uses default XDG sessions", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const defaultSessions = join(xdgDataHome, "omp", "sessions");
+	const piProfile = "auditprof";
+	const piSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		piProfile,
+		"sessions",
+	);
+	const agentDir = join(fixture.home, ".omp", "agent");
+
+	// PI named root exists but must be ignored when OMP_PROFILE is explicitly "".
+	mkdirSync(piSessions, { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+
+	// Explicit empty normalizes to the flattened default root.
+	writeSessionTranscript(defaultSessions, fixture.worktree, {
+		id: "omp-empty-precedence-session",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		OMP_PROFILE: "",
+		PI_PROFILE: piProfile,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("verify-recent-chat");
+	expect(row.lastChat).toMatch(DATE_RE);
+	expect(row.bucket).not.toBe("safe");
+});
+
+test("explicit empty OMP_PROFILE does not adopt PI_PROFILE named XDG root", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	const defaultSessions = join(xdgDataHome, "omp", "sessions");
+	const piProfile = "auditprof";
+	const piSessions = join(
+		xdgDataHome,
+		"omp",
+		"profiles",
+		piProfile,
+		"sessions",
+	);
+	const agentDir = join(fixture.home, ".omp", "agent");
+
+	mkdirSync(defaultSessions, { recursive: true });
+	installOmpConfigPathStub(fixture.bin, agentDir);
+
+	// Matching recent chat lives only under PI's named root — must not apply.
+	writeSessionTranscript(piSessions, fixture.worktree, {
+		id: "pi-named-ignored-under-empty-omp",
+	});
+
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		OMP_PROFILE: "",
+		PI_PROFILE: piProfile,
+	});
+	expect(result.exitCode).toBe(0);
+	const row = rowFor(result.rows, fixture.worktree);
+	expect(row.bucket).toBe("safe");
+	expect(row.lastChat).toBe("-");
+});
+
+test("invalid profile name fails closed under usual lowercase-safe validation", () => {
+	const fixture = createFixture({ merged: true });
+	const xdgDataHome = join(fixture.root, "xdg-data");
+	mkdirSync(join(xdgDataHome, "omp"), { recursive: true });
+	installOmpConfigPathStub(fixture.bin, join(fixture.home, ".omp", "agent"));
+
+	// Independent source of truth: profile names must match
+	// [A-Za-z0-9][A-Za-z0-9_.-]* (no spaces / path punctuation).
+	const result = runAudit(fixture, {
+		XDG_DATA_HOME: xdgDataHome,
+		OMP_PROFILE: "Bad Name",
+	});
+	expectFailClosedNotSafe(result, fixture.worktree);
 });
