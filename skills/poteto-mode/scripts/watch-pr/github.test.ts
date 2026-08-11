@@ -1,6 +1,10 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ChecksUnavailable,
+  GhGitHubReader,
   WatcherQueryError,
   mapRollupNode,
   orderStack,
@@ -302,5 +306,137 @@ describe("context and stack discovery", () => {
       },
     ]);
     expect(ordered.map((item) => Number(item.number))).toEqual([41, 42, 43]);
+  });
+});
+
+const ghFixtureDirs: string[] = [];
+
+afterEach(async () => {
+  for (const directory of ghFixtureDirs.splice(0)) {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function withControllableGh<T>(
+  operation: (callsPath: string) => Promise<T>
+): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), "watch-pr-gh-"));
+  ghFixtureDirs.push(directory);
+  const bin = join(directory, "bin");
+  const callsPath = join(directory, "gh-calls.jsonl");
+  const page1Path = join(directory, "page1.json");
+  const page2Path = join(directory, "page2.json");
+  await mkdir(bin);
+
+  const endCursor = "cursor-page-1";
+  await writeFile(
+    page1Path,
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: true, endCursor },
+              nodes: [],
+            },
+          },
+        },
+      },
+    })
+  );
+  await writeFile(
+    page2Path,
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: "blocking-thread",
+                  isResolved: false,
+                  comments: {
+                    nodes: [
+                      {
+                        body: "please fix this",
+                        createdAt: "2026-08-11T00:00:00Z",
+                        path: "src/app.ts",
+                        line: 10,
+                        author: { login: "reviewer" },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    })
+  );
+
+  const gh = join(bin, "gh");
+  await writeFile(
+    gh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+calls=${JSON.stringify(callsPath)}
+page1=${JSON.stringify(page1Path)}
+page2=${JSON.stringify(page2Path)}
+printf '%s\\n' "$(printf '%s\\0' "$@" | base64 -w0)" >> "$calls"
+after=""
+for arg in "$@"; do
+  case "$arg" in
+    after=*) after="\${arg#after=}" ;;
+  esac
+done
+if [ -z "$after" ]; then
+  cat "$page1"
+elif [ "$after" = ${JSON.stringify(endCursor)} ]; then
+  cat "$page2"
+else
+  printf 'unexpected after cursor: %s\\n' "$after" >&2
+  exit 2
+fi
+`
+  );
+  await chmod(gh, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath ?? ""}`;
+  try {
+    return await operation(callsPath);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
+async function readGhCalls(callsPath: string): Promise<readonly string[][]> {
+  const text = await readFile(callsPath, "utf8");
+  return text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) =>
+      Buffer.from(line, "base64").toString("utf8").split("\0").filter(Boolean)
+    );
+}
+
+describe("GhGitHubReader.reviewThreads pagination", () => {
+  it("fetches every page with endCursor and returns a later-page blocker before readiness", async () => {
+    const endCursor = "cursor-page-1";
+    await withControllableGh(async (callsPath) => {
+      const threads = await new GhGitHubReader().reviewThreads(context);
+      const calls = await readGhCalls(callsPath);
+      const afterArgs = calls.map(
+        (argv) => argv.find((arg) => arg.startsWith("after=")) ?? null
+      );
+
+      expect(afterArgs).toEqual([null, `after=${endCursor}`]);
+      expect(threads.map((thread) => thread.id)).toEqual(["blocking-thread"]);
+      expect(threads[0]?.firstComment?.body).toBe("please fix this");
+    });
   });
 });
