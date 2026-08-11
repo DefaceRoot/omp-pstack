@@ -279,7 +279,10 @@ describe("omp-pstack runtime extension", () => {
 	});
 
 	test("pstack-cleanup asks before deleting only the exact OMP model rule under active getAgentDir()", async () => {
-		const agentDir = "/tmp/profiles/work/agent";
+		// Derive the active profile agent dir under this test's mkdtemp homeDir —
+		// never a fixed global /tmp/profiles/... path, and never rmSync a path
+		// outside the existing afterEach homeDir cleanup.
+		const agentDir = join(homeDir, "profiles", "work", "agent");
 		const rulesDir = join(agentDir, "rules");
 		mkdirSync(rulesDir, { recursive: true });
 		const modelRulePath = join(rulesDir, PSTACK_MODEL_RULE_BASENAME);
@@ -310,7 +313,6 @@ describe("omp-pstack runtime extension", () => {
 		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
 		expect(readFileSync(otherRulePath, "utf8")).toBe("keep me\n");
 		expect(readFileSync(homeFallbackPath, "utf8")).toBe("do not touch home fallback\n");
-		rmSync(agentDir, { recursive: true, force: true });
 	});
 
 	test("pstack-cleanup falls back to homeDir/.omp/agent when getAgentDir is unavailable", async () => {
