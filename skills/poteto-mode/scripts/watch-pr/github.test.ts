@@ -510,3 +510,177 @@ describe("GhGitHubReader.reviewThreads pagination", () => {
     );
   });
 });
+
+
+type CheckRollupNode = {
+  readonly __typename: "CheckRun";
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly detailsUrl: string | null;
+};
+
+type CheckRollupPage = {
+  readonly pageInfo: {
+    readonly hasNextPage: boolean;
+    readonly endCursor: string | null;
+  };
+  readonly nodes: readonly CheckRollupNode[];
+};
+
+function checkRollupResponse(page: CheckRollupPage) {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  statusCheckRollup: {
+                    contexts: page,
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+const passingRollupNode = {
+  __typename: "CheckRun",
+  name: "ci",
+  status: "COMPLETED",
+  conclusion: "SUCCESS",
+  detailsUrl: null,
+} as const satisfies CheckRollupNode;
+
+async function withControllableCheckRollupPages<T>(
+  pages: readonly CheckRollupPage[],
+  operation: (callsPath: string) => Promise<T>
+): Promise<T> {
+  if (pages.length === 0)
+    throw new Error("withControllableCheckRollupPages needs pages");
+  const directory = await mkdtemp(join(tmpdir(), "watch-pr-gh-rollup-"));
+  ghFixtureDirs.push(directory);
+  const bin = join(directory, "bin");
+  const callsPath = join(directory, "gh-calls.jsonl");
+  const pagesPath = join(directory, "pages.json");
+  await mkdir(bin);
+  await writeFile(pagesPath, JSON.stringify(pages.map(checkRollupResponse)));
+
+  const gh = join(bin, "gh");
+  await writeFile(
+    gh,
+    `#!/usr/bin/env bun
+import { appendFileSync, readFileSync } from "node:fs";
+const callsPath = ${JSON.stringify(callsPath)};
+const pages = JSON.parse(readFileSync(${JSON.stringify(pagesPath)}, "utf8"));
+const argv = process.argv.slice(2);
+appendFileSync(
+  callsPath,
+  Buffer.from(argv.join("\\0"), "utf8").toString("base64") + "\\n"
+);
+const afterArg = argv.find((arg) => arg.startsWith("after="));
+const after = afterArg === undefined ? null : afterArg.slice("after=".length);
+let index = 0;
+if (after !== null) {
+  const prior = pages.findIndex(
+    (page) =>
+      page.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup
+        .contexts.pageInfo.endCursor === after
+  );
+  if (prior < 0 || prior + 1 >= pages.length) {
+    console.error(\`unexpected after cursor: \${after}\`);
+    process.exit(2);
+  }
+  index = prior + 1;
+}
+process.stdout.write(JSON.stringify(pages[index]));
+`
+  );
+  await chmod(gh, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath ?? ""}`;
+  try {
+    return await operation(callsPath);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
+describe("GhGitHubReader.checkRollupPage pagination", () => {
+  it("throws WatcherQueryError when hasNextPage is true but endCursor is null or empty", async () => {
+    for (const endCursor of [null, ""] as const) {
+      await withControllableCheckRollupPages(
+        [
+          {
+            pageInfo: { hasNextPage: true, endCursor },
+            nodes: [passingRollupNode],
+          },
+        ],
+        async () => {
+          let caught: unknown;
+          try {
+            await new GhGitHubReader().checkRollupPage(context, null);
+          } catch (error) {
+            caught = error;
+          }
+          expect(caught).toBeInstanceOf(WatcherQueryError);
+          if (!(caught instanceof WatcherQueryError)) throw caught;
+          expect(caught.failure.retryable).toBe(true);
+        }
+      );
+    }
+  });
+});
+
+describe("resolveChecks rollup pagination", () => {
+  it("aggregates valid later-page checks and rejects a repeated endCursor before duplicates", async () => {
+    const happy = fakeReader({
+      fastPath: { kind: "unusable", exitCode: 8, stderr: "" },
+      rollupPages: [
+        { checks: [passingCheck("first")], endCursor: "cursor-page-1" },
+        { checks: [failedCheck("second")], endCursor: null },
+      ],
+    });
+    const aggregated = await resolveChecks(happy, context);
+    expect(aggregated.source).toBe("graphql-rollup");
+    expect(aggregated.checks.map((check) => check.name)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(happy.calls).toEqual([
+      "checksFastPath",
+      "checkRollupPage:null",
+      "checkRollupPage:cursor-page-1",
+    ]);
+
+    const looping = fakeReader({
+      fastPath: { kind: "unusable", exitCode: 8, stderr: "" },
+      rollupPages: [
+        { checks: [passingCheck("first")], endCursor: "cursor-loop" },
+        { checks: [passingCheck("duplicate")], endCursor: "cursor-loop" },
+      ],
+    });
+    let caught: unknown;
+    try {
+      await resolveChecks(looping, context);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(WatcherQueryError);
+    if (!(caught instanceof WatcherQueryError)) throw caught;
+    expect(caught.failure.retryable).toBe(true);
+    expect(looping.calls).toEqual([
+      "checksFastPath",
+      "checkRollupPage:null",
+      "checkRollupPage:cursor-loop",
+    ]);
+  });
+});
