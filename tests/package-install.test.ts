@@ -70,18 +70,23 @@ const PSTACK_TRIAL_COMMANDS = [
 	"/pstack-off",
 ] as const;
 
-/** Normalized fenced example lines currently required for team-kit skills. */
+/**
+ * Exact current contract fenced example lines from README.
+ * Compare after whitespace normalization only — no regex/blacklist paraphrases.
+ */
 const TEAM_KIT_EXAMPLE_LINES = [
 	"/deslop Review the current branch diff against main and remove AI-generated code slop without changing behavior.",
 	"/control-cli Reproduce the startup hang in `bun run tui`, enter `help`, then press Ctrl-C; capture the terminal transcript.",
 	"/control-ui Start `bun run dev`, open http://localhost:3000, submit the login form, and capture a screenshot plus an accessibility snapshot.",
 ] as const;
 
-/** Explicit uninstall clauses — pin wording, do not fuzzy-match polarity. */
-const REQUIRED_REMOTE_MANAGED_UNINSTALL_CLAUSE =
-	"For a GitHub remote install, uninstall removes OMP's managed installed copy.";
-const REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE =
-	"For a local-link install from a local checkout, uninstall removes only OMP's plugin registration/link; it never deletes the user-owned checkout or working tree.";
+/**
+ * Exact current remote/local removal contract clause from README.
+ * Affirmative managed-copy removal + local registration/link removal with
+ * explicit non-deletion of the user-owned checkout are pinned by wording.
+ */
+const REQUIRED_REMOVAL_CLAUSE =
+	"For a GitHub remote install, uninstall removes OMP's managed installed copy. For a local-link install from a local checkout, uninstall removes only OMP's plugin registration/link; it never deletes the user-owned checkout or working tree.";
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
@@ -113,6 +118,11 @@ function normalizeFilesEntry(entry: string): string {
 	return entry.replace(/^\.\//, "").replace(/\/$/, "");
 }
 
+/** Collapse whitespace only — preserves wording/polarity, ignores wrapping. */
+function normalizeWhitespace(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
 function extractFencedBlocks(markdown: string): string[] {
 	const blocks: string[] = [];
 	const re = /```[^\n]*\n([\s\S]*?)```/g;
@@ -122,25 +132,12 @@ function extractFencedBlocks(markdown: string): string[] {
 	return blocks;
 }
 
-/** Non-empty trimmed lines from all fenced code/example blocks. */
+/** Non-empty whitespace-normalized lines from all fenced code/example blocks. */
 function fencedExampleLines(markdown: string): string[] {
 	return extractFencedBlocks(markdown)
 		.flatMap((block) => block.split("\n"))
-		.map((line) => line.trim())
+		.map((line) => normalizeWhitespace(line))
 		.filter((line) => line.length > 0);
-}
-
-/** Period/exclamation sentences inside blank-line paragraphs (semicolons stay in-clause). */
-function uninstallSentences(text: string): string[] {
-	return text
-		.split(/\n{2,}/)
-		.flatMap((paragraph) =>
-			paragraph
-				.replace(/\n+/g, " ")
-				.split(/(?<=[.!])\s+/)
-				.map((part) => part.trim())
-				.filter((part) => part.length > 0 && /uninstall/i.test(part)),
-		);
 }
 
 function collectLicenseTexts(): Array<{ path: string; text: string }> {
@@ -220,13 +217,12 @@ test("README fences a runnable P-Stack trial and pinned team-kit slash example l
 
 	// Representative P-Stack trial must appear as runnable fenced lines, not prose token mentions.
 	for (const command of PSTACK_TRIAL_COMMANDS) {
-		expect(lines).toContain(command);
+		expect(lines).toContain(normalizeWhitespace(command));
 	}
 
-	// Pin the normalized current team-kit example lines (concrete task/input included).
-	// Placeholder lines like `/deslop TODO: add task` or `/control-ui example` must not satisfy these.
+	// Exact current team-kit example lines (whitespace-normalized only).
 	for (const example of TEAM_KIT_EXAMPLE_LINES) {
-		expect(lines).toContain(example);
+		expect(lines).toContain(normalizeWhitespace(example));
 	}
 });
 
@@ -255,14 +251,14 @@ test("README polarity-binds cleanup to the generated model rule and preserves us
 	);
 });
 
-test("README pins remote managed-copy removal and local-checkout non-deletion in bounded uninstall sentences", () => {
+test("README pins the exact remote/local uninstall removal clause", () => {
 	const readme = readReadme();
-	const bounded = uninstallSentences(readme);
-	expect(bounded.length).toBeGreaterThan(0);
 
-	// Exact required clauses — wording pins polarity so fuzzy "no longer removes" cannot pass.
-	expect(bounded).toContain(REQUIRED_REMOTE_MANAGED_UNINSTALL_CLAUSE);
-	expect(bounded).toContain(REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE);
+	// Exact combined clause — wording pins affirmative/negative semantics.
+	// Whitespace normalize only; placeholder/negator paraphrases cannot pass.
+	expect(normalizeWhitespace(readme)).toContain(
+		normalizeWhitespace(REQUIRED_REMOVAL_CLAUSE),
+	);
 });
 
 test("README links canonical upstream sources and root licensing retains separate Lauren Tan and Cursor notices", () => {
