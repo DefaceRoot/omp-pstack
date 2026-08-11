@@ -2,6 +2,7 @@
 name: poteto-agent
 description: routing target for `/poteto-mode` and requests for poteto's style; reads `skill://poteto-mode` in full before any work so delegated OMP tasks keep the same workflow.
 blocking: false
+spawns: "*"
 ---
 
 # Poteto subagent
