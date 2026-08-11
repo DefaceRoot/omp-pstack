@@ -10,8 +10,10 @@ import {
 	PSTACK_MODEL_RULE_BASENAME,
 	PSTACK_SESSION_COMMANDS,
 } from "./helpers/runtime-expected-commands.ts";
+import { hasNonRecursiveBuiltInToolWhitelist } from "./helpers/runtime-agent-capabilities.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
 import { isStrictTextOutputSchema } from "./helpers/runtime-output-schema.ts";
+import { createFakeSettings } from "./helpers/runtime-settings.ts";
 
 // Public seams under test (absent until the green implementation lands).
 import pstackExtension, {
@@ -656,6 +658,112 @@ describe("pstack_task tool seam", () => {
 			expect(text).toMatch(/exit 0/);
 			expect(text).not.toContain(ompOmissionError);
 			expect(text).not.toMatch(/exit 1/);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("pstack_task respects live settings.get(task.maxConcurrency) with bounded concurrency and stable order", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-conc-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-conc-home-"));
+		writePackageFixture(packageRoot);
+
+		const settings = createFakeSettings({ "task.maxConcurrency": 2 });
+		const runtime = createFakeRuntime({ cwd: packageRoot, settings });
+
+		let active = 0;
+		let maxActive = 0;
+		const started: string[] = [];
+		const completed: string[] = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			started.push(options.id);
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await Bun.sleep(40);
+			active -= 1;
+			completed.push(options.id);
+			return { exitCode: 0, id: options.id, output: `done:${options.task}` };
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				"call-concurrency",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: "s1", task: "one" },
+						{ id: "s2", task: "two" },
+						{ id: "s3", task: "three" },
+						{ id: "s4", task: "four" },
+						{ id: "s5", task: "five" },
+					],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			// Positive N must bound concurrent native runner calls.
+			expect(maxActive).toBe(2);
+			expect(started).toHaveLength(5);
+			expect(completed).toHaveLength(5);
+
+			const details = resultDetails(result);
+			const results = Array.isArray(details.results)
+				? (details.results as Array<{ id?: string; exitCode?: number }>)
+				: [];
+			expect(results.map((item) => item.id)).toEqual(["s1", "s2", "s3", "s4", "s5"]);
+			expect(results.every((item) => item.exitCode === 0)).toBe(true);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("every AgentDefinition passed to raw runSubprocess has a non-recursive built-in tool whitelist and empty spawns", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-caps-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-caps-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const agents: Array<Record<string, unknown>> = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			const agent = options.agent as Record<string, unknown> | undefined;
+			agents.push({
+				agent,
+				requireYieldTool: (options as { requireYieldTool?: unknown }).requireYieldTool,
+			});
+			return { exitCode: 0, id: options.id, output: "ok" };
+		};
+
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			await tool.execute(
+				"call-agent-caps",
+				{
+					strategy: "panel",
+					prompt: "stay non-recursive",
+					models: ["m1", "m2"],
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			expect(agents).toHaveLength(2);
+			for (const entry of agents) {
+				const agent = entry.agent as { tools?: unknown; spawns?: unknown } | undefined;
+				expect(hasNonRecursiveBuiltInToolWhitelist(agent)).toBe(true);
+				// Yield remains available through requireYieldTool, not by listing recursive task tools.
+				expect(entry.requireYieldTool).toBe(true);
+				const tools = Array.isArray(agent?.tools) ? agent.tools : [];
+				expect(tools.includes("yield")).toBe(false);
+			}
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });

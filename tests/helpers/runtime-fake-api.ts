@@ -62,6 +62,10 @@ export type FakeCommandContext = {
 	modelRegistry?: unknown;
 };
 
+export type FakeSettingsLike = {
+	get: (key: string) => unknown;
+};
+
 export type FakeExtensionAPI = {
 	registerCommand: (
 		name: string,
@@ -77,6 +81,11 @@ export type FakeExtensionAPI = {
 	sendUserMessage: (content: unknown, options?: unknown) => void;
 	setLabel: (label: string) => void;
 	zod: { object: (...args: unknown[]) => unknown; string: () => unknown; array: (...args: unknown[]) => unknown };
+	/** Host runtime surface read by the extension (`pi.pi.settings`). */
+	pi?: {
+		settings?: FakeSettingsLike;
+		runSubprocess?: unknown;
+	};
 };
 
 export type FakeRuntimeOptions = {
@@ -85,6 +94,8 @@ export type FakeRuntimeOptions = {
 	initialEntries?: CustomSessionEntry[];
 	/** Active parent session model exposed on tool/command context. */
 	parentModel?: FakeModel;
+	/** Live settings bag exposed at `api.pi.settings`. */
+	settings?: FakeSettingsLike;
 };
 
 export type FakeRuntime = {
@@ -98,6 +109,7 @@ export type FakeRuntime = {
 	handlers: Map<string, Array<(...args: unknown[]) => unknown>>;
 	setConfirmResult: (value: boolean) => void;
 	setParentModel: (model: FakeModel | undefined) => void;
+	setSettings: (settings: FakeSettingsLike | undefined) => void;
 	replaceEntries: (next: CustomSessionEntry[]) => void;
 	createContext: () => FakeCommandContext;
 	invokeCommand: (name: string, args?: string) => Promise<void>;
@@ -121,6 +133,7 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 	let confirmResult = options.confirmResult ?? true;
 	let parentModel = options.parentModel;
+	let settings = options.settings;
 	const cwd = options.cwd ?? process.cwd();
 
 	const createContext = (): FakeCommandContext => ({
@@ -180,6 +193,11 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			string: () => ({}),
 			array: () => ({}),
 		},
+		pi: {
+			get settings() {
+				return settings;
+			},
+		},
 	};
 
 	async function emitLifecycle(event: string, payload: Record<string, unknown>): Promise<void> {
@@ -204,6 +222,9 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		},
 		setParentModel(model) {
 			parentModel = model;
+		},
+		setSettings(next) {
+			settings = next;
 		},
 		replaceEntries(next) {
 			entries.splice(0, entries.length, ...next);
