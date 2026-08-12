@@ -389,6 +389,10 @@ describe("omp-pstack runtime extension", () => {
 		expect(runtime.sentMessages).toEqual([]);
 		expect(runtime.entries.filter((e) => e.customType === PSTACK_MODE_ENTRY_TYPE)).toEqual([]);
 		expectPotetoStatus(runtime, undefined);
+
+		// Draft-only shortcut must not arm sticky mode or inject the Poteto system prompt.
+		const afterShortcut = await runtime.emitBeforeAgentStart(["base-system"]);
+		expect(afterShortcut?.systemPrompt ?? ["base-system"]).toEqual(["base-system"]);
 	});
 
 	test("/poteto-mode projects preset-aware poteto-mode status and /pstack-off clears it", async () => {
