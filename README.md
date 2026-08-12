@@ -54,6 +54,10 @@ The rule is optional; omitted roles use OMP's automatic model selection. Re-runn
 
 Run `/poteto-mode` to enable the P-Stack workflow guidance for the current session. The mode is sticky within that session. Use `/pstack-status` to see whether it is on, and `/pstack-off` to turn the session mode off.
 
+Press Ctrl+Alt+P to place the visible `/poteto-mode ` prefix in the editor, type the goal after it, and submit normally. While the mode is active, the status bar shows `🥔 poteto`, or `[P] poteto` with the ASCII symbol preset.
+
+OMP reserves Ctrl+Shift+P for reverse model cycling. Its public extension API does not expose native editor or status-frame colors, so the extension cannot add a yellow native border.
+
 P-Stack's other shipped skills are available as native OMP slash commands. Their source content lives in package paths such as `skills/poteto-mode/`.
 
 ### Try the workflows

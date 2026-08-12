@@ -38,6 +38,8 @@ const DIRECT_SKILLS = [
 
 const TEAM_KIT_SKILLS = ["deslop", "control-cli", "control-ui"] as const;
 const MODE_ENTRY_TYPE = "pstack-mode";
+const POTETO_COMMAND = "/poteto-mode";
+const POTETO_STATUS_KEY = "poteto-mode";
 const MODEL_RULE_BASENAME = "pstack-models.md";
 const DEFAULT_REMINDER =
 	"New task? Playbook match or rigor needed -> apply /poteto-mode. Casual turn or user opts out -> don't.";
@@ -62,11 +64,19 @@ type ActiveModel = {
 	id: string;
 };
 
+type SymbolPreset = "unicode" | "nerd" | "ascii";
+
 type CommandContext = {
 	cwd: string;
 	ui: {
 		notify?: (message: string, level?: string) => void;
 		confirm: (title: string, message: string) => Promise<boolean>;
+		setStatus: (key: string, text: string | undefined) => void;
+		setEditorText: (text: string) => void;
+		getEditorText: () => string;
+		theme: {
+			getSymbolPreset: () => SymbolPreset;
+		};
 	};
 	sessionManager: {
 		getBranch?: () => unknown[];
@@ -86,6 +96,13 @@ type ExtensionApi = {
 		options: {
 			description?: string;
 			handler: (args: string, ctx: CommandContext) => void | Promise<void>;
+		},
+	) => void;
+	registerShortcut: (
+		shortcut: string,
+		options: {
+			description?: string;
+			handler: (ctx: CommandContext) => void | Promise<void>;
 		},
 	) => void;
 	registerTool: (tool: Record<string, unknown>) => void;
@@ -297,6 +314,14 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			() => pi.pi?.settings?.get?.("task.maxConcurrency"),
 		);
 		let modeActive = false;
+		const projectModeStatus = (ctx: CommandContext): void => {
+			if (!modeActive) {
+				ctx.ui.setStatus(POTETO_STATUS_KEY, undefined);
+				return;
+			}
+			const text = ctx.ui.theme.getSymbolPreset() === "ascii" ? "[P] poteto" : "🥔 poteto";
+			ctx.ui.setStatus(POTETO_STATUS_KEY, text);
+		};
 
 		const loadDocument = async (relativePath: string): Promise<SkillDocument> =>
 			parseSkillDocument(await readText(join(packageRoot, relativePath)));
@@ -318,6 +343,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 						if (name === "poteto-mode") {
 							modeActive = true;
 							pi.appendEntry(MODE_ENTRY_TYPE, { state: "ON" });
+							projectModeStatus(ctx);
 						}
 						const argumentBlock = args === "" ? "" : `\n\nUser arguments (verbatim):\n${args}`;
 						sendPrompt(`${skill.body.trimEnd()}${argumentBlock}`);
@@ -328,11 +354,21 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			});
 		}
 
+		pi.registerShortcut("ctrl+alt+p", {
+			description: "Prepare a Poteto mode prompt",
+			handler(ctx) {
+				const draft = ctx.ui.getEditorText();
+				if (draft === POTETO_COMMAND || draft.startsWith(`${POTETO_COMMAND} `)) return;
+				ctx.ui.setEditorText(`${POTETO_COMMAND} ${draft}`);
+			},
+		});
+
 		pi.registerCommand("pstack-off", {
 			description: "Disable sticky P-Stack mode for this session",
-			handler() {
+			handler(_args, ctx) {
 				modeActive = false;
 				pi.appendEntry(MODE_ENTRY_TYPE, { state: "OFF" });
+				projectModeStatus(ctx);
 			},
 		});
 
@@ -370,6 +406,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		const reconstructMode = (_event: unknown, ctx: CommandContext): void => {
 			const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
 			modeActive = latestModeState(entries);
+			projectModeStatus(ctx);
 		};
 		for (const event of ["session_start", "session_switch", "session_branch", "session_tree"]) {
 			pi.on(event, reconstructMode);

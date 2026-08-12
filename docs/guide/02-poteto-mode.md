@@ -4,6 +4,12 @@
 
 ![A dispatcher pulls a switch lever to route robots on rail handcars toward lit gates, under a /poteto-mode departure board listing BUG FIX, FEATURE, and INVESTIGATION.](./images/router.jpg)
 
+## Start with Ctrl+Alt+P
+
+Press Ctrl+Alt+P to place the visible `/poteto-mode ` prefix in the editor. Type your goal after the prefix, then submit normally. The shortcut only edits the draft; submitting the command activates the mode and shows `🥔 poteto` in the status bar, or `[P] poteto` with the ASCII symbol preset. `/pstack-off` disables the mode and clears the indicator.
+
+Ctrl+Shift+P is unavailable because OMP reserves it for reverse model cycling. OMP's public extension API does not expose native editor or status-frame colors, so Poteto mode cannot add a yellow native border.
+
 ## What happens to your prompt
 
 ```mermaid
