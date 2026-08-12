@@ -357,7 +357,6 @@ describe("omp-pstack runtime extension", () => {
 
 		expect(runtime.shortcuts.has("ctrl+alt+p")).toBe(true);
 
-		// Empty draft becomes a ready-to-edit /poteto-mode invocation.
 		runtime.setEditorText("");
 		await runtime.invokeShortcut("ctrl+alt+p");
 		expect(runtime.getEditorText()).toBe("/poteto-mode ");
@@ -365,7 +364,6 @@ describe("omp-pstack runtime extension", () => {
 		expect(latestModeEntry(runtime)).toBeUndefined();
 		expectPotetoStatus(runtime, undefined);
 
-		// Nonempty draft is prefixed; still draft-only (no send, no ON, no status).
 		runtime.setEditorText("ship the watcher");
 		await runtime.invokeShortcut("ctrl+alt+p");
 		expect(runtime.getEditorText()).toBe("/poteto-mode ship the watcher");
@@ -373,7 +371,6 @@ describe("omp-pstack runtime extension", () => {
 		expect(latestModeEntry(runtime)).toBeUndefined();
 		expectPotetoStatus(runtime, undefined);
 
-		// Exact /poteto-mode and /poteto-mode-prefixed drafts are idempotent.
 		runtime.setEditorText("/poteto-mode");
 		await runtime.invokeShortcut("ctrl+alt+p");
 		expect(runtime.getEditorText()).toBe("/poteto-mode");
@@ -390,7 +387,6 @@ describe("omp-pstack runtime extension", () => {
 		expect(runtime.entries.filter((e) => e.customType === PSTACK_MODE_ENTRY_TYPE)).toEqual([]);
 		expectPotetoStatus(runtime, undefined);
 
-		// Draft-only shortcut must not arm sticky mode or inject the Poteto system prompt.
 		const afterShortcut = await runtime.emitBeforeAgentStart(["base-system"]);
 		expect(afterShortcut?.systemPrompt ?? ["base-system"]).toEqual(["base-system"]);
 	});
@@ -398,7 +394,6 @@ describe("omp-pstack runtime extension", () => {
 	test("/poteto-mode projects preset-aware poteto-mode status and /pstack-off clears it", async () => {
 		loadExtension(runtime, { packageRoot, homeDir });
 
-		// Default unicode preset.
 		await runtime.invokeCommand("poteto-mode", "focus");
 		expect(latestModeEntry(runtime)).toEqual({ state: "ON" });
 		expectPotetoStatus(runtime, "🥔 poteto");
@@ -407,14 +402,12 @@ describe("omp-pstack runtime extension", () => {
 		expect(latestModeEntry(runtime)).toEqual({ state: "OFF" });
 		expectPotetoStatus(runtime, undefined);
 
-		// nerd matches unicode potato glyph.
 		runtime.setSymbolPreset("nerd");
 		await runtime.invokeCommand("poteto-mode", "again");
 		expectPotetoStatus(runtime, "🥔 poteto");
 		await runtime.invokeCommand("pstack-off");
 		expectPotetoStatus(runtime, undefined);
 
-		// ascii falls back to a plain marker.
 		runtime.setSymbolPreset("ascii");
 		await runtime.invokeCommand("poteto-mode", "ascii path");
 		expectPotetoStatus(runtime, "[P] poteto");

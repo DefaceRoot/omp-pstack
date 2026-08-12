@@ -39,7 +39,6 @@ export type SentMessage = {
 	options?: unknown;
 };
 
-/** OMP KeyId-compatible shortcut id (e.g. `ctrl+alt+p`). */
 export type FakeKeyId = string;
 
 export type SymbolPreset = "unicode" | "nerd" | "ascii";
@@ -54,7 +53,6 @@ export type FakeCommandContext = {
 	ui: {
 		notify: (message: string, level?: string) => void;
 		confirm: (title: string, message: string) => Promise<boolean>;
-		/** Footer/status-bar projection. Pass undefined to clear. */
 		setStatus: (key: string, text: string | undefined) => void;
 		setEditorText: (text: string) => void;
 		getEditorText: () => string;
@@ -135,9 +133,7 @@ export type FakeRuntimeOptions = {
 	 * Defaults to 17.2.13 so green-gated init does not break unrelated runtime tests.
 	 */
 	version?: string | undefined;
-	/** Theme symbol preset exposed at `ctx.ui.theme.getSymbolPreset()`. Defaults to unicode. */
 	symbolPreset?: SymbolPreset;
-	/** Initial editor draft exposed at `ctx.ui.getEditorText()`. */
 	editorText?: string;
 };
 
@@ -150,7 +146,6 @@ export type FakeRuntime = {
 	sentMessages: SentMessage[];
 	notifications: Array<{ message: string; level?: string }>;
 	confirmCalls: Array<{ title: string; message: string }>;
-	/** Shared keyed status projection across all fake contexts. */
 	statuses: Map<string, string>;
 	handlers: Map<string, Array<(...args: unknown[]) => unknown>>;
 	setConfirmResult: (value: boolean) => void;
