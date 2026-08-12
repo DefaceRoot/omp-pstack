@@ -126,6 +126,17 @@ describe("omp-pstack runtime extension", () => {
 		rmSync(homeDir, { recursive: true, force: true });
 	});
 
+
+	const POTETO_STATUS_KEY = "poteto-mode";
+
+	function expectPotetoStatus(runtime: FakeRuntime, expected: string | undefined): void {
+		if (expected === undefined) {
+			expect(runtime.statuses.has(POTETO_STATUS_KEY)).toBe(false);
+		} else {
+			expect(runtime.statuses.get(POTETO_STATUS_KEY)).toBe(expected);
+		}
+	}
+
 	// Final RED follow-ups after e38bc0d (this commit owns all three):
 	// 1) getAgentDir profile fixture under join(homeDir,'profiles','work','agent') — no fixed /tmp path
 	// 2) reject pi.pi.VERSION 17.2.13-beta.1 as < stable 17.2.13
@@ -340,6 +351,102 @@ describe("omp-pstack runtime extension", () => {
 		expect(runtime.confirmCalls[0]!.message).toContain(modelRulePath);
 		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
 	});
+
+	test("registers ctrl+alt+p and only rewrites the visible editor draft", async () => {
+		loadExtension(runtime, { packageRoot, homeDir });
+
+		expect(runtime.shortcuts.has("ctrl+alt+p")).toBe(true);
+
+		// Empty draft becomes a ready-to-edit /poteto-mode invocation.
+		runtime.setEditorText("");
+		await runtime.invokeShortcut("ctrl+alt+p");
+		expect(runtime.getEditorText()).toBe("/poteto-mode ");
+		expect(runtime.sentMessages).toEqual([]);
+		expect(latestModeEntry(runtime)).toBeUndefined();
+		expectPotetoStatus(runtime, undefined);
+
+		// Nonempty draft is prefixed; still draft-only (no send, no ON, no status).
+		runtime.setEditorText("ship the watcher");
+		await runtime.invokeShortcut("ctrl+alt+p");
+		expect(runtime.getEditorText()).toBe("/poteto-mode ship the watcher");
+		expect(runtime.sentMessages).toEqual([]);
+		expect(latestModeEntry(runtime)).toBeUndefined();
+		expectPotetoStatus(runtime, undefined);
+
+		// Exact /poteto-mode and /poteto-mode-prefixed drafts are idempotent.
+		runtime.setEditorText("/poteto-mode");
+		await runtime.invokeShortcut("ctrl+alt+p");
+		expect(runtime.getEditorText()).toBe("/poteto-mode");
+
+		runtime.setEditorText("/poteto-mode already armed");
+		await runtime.invokeShortcut("ctrl+alt+p");
+		expect(runtime.getEditorText()).toBe("/poteto-mode already armed");
+
+		runtime.setEditorText("/poteto-mode ");
+		await runtime.invokeShortcut("ctrl+alt+p");
+		expect(runtime.getEditorText()).toBe("/poteto-mode ");
+
+		expect(runtime.sentMessages).toEqual([]);
+		expect(runtime.entries.filter((e) => e.customType === PSTACK_MODE_ENTRY_TYPE)).toEqual([]);
+		expectPotetoStatus(runtime, undefined);
+	});
+
+	test("/poteto-mode projects preset-aware poteto-mode status and /pstack-off clears it", async () => {
+		loadExtension(runtime, { packageRoot, homeDir });
+
+		// Default unicode preset.
+		await runtime.invokeCommand("poteto-mode", "focus");
+		expect(latestModeEntry(runtime)).toEqual({ state: "ON" });
+		expectPotetoStatus(runtime, "🥔 poteto");
+
+		await runtime.invokeCommand("pstack-off");
+		expect(latestModeEntry(runtime)).toEqual({ state: "OFF" });
+		expectPotetoStatus(runtime, undefined);
+
+		// nerd matches unicode potato glyph.
+		runtime.setSymbolPreset("nerd");
+		await runtime.invokeCommand("poteto-mode", "again");
+		expectPotetoStatus(runtime, "🥔 poteto");
+		await runtime.invokeCommand("pstack-off");
+		expectPotetoStatus(runtime, undefined);
+
+		// ascii falls back to a plain marker.
+		runtime.setSymbolPreset("ascii");
+		await runtime.invokeCommand("poteto-mode", "ascii path");
+		expectPotetoStatus(runtime, "[P] poteto");
+		await runtime.invokeCommand("pstack-off");
+		expectPotetoStatus(runtime, undefined);
+	});
+
+	test("session_start and session_switch reconstruct poteto-mode status from latest ON/OFF", async () => {
+		const onRuntime = createFakeRuntime({
+			cwd: packageRoot,
+			initialEntries: [
+				{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "OFF" } },
+				{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "ON" } },
+			],
+		});
+		loadExtension(onRuntime, { packageRoot, homeDir });
+		expectPotetoStatus(onRuntime, undefined);
+
+		await onRuntime.emitSessionStart();
+		expectPotetoStatus(onRuntime, "🥔 poteto");
+
+		onRuntime.setSymbolPreset("ascii");
+		onRuntime.replaceEntries([
+			{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "ON" } },
+			{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "OFF" } },
+		]);
+		await onRuntime.emitSessionSwitch("resume");
+		expectPotetoStatus(onRuntime, undefined);
+
+		onRuntime.replaceEntries([
+			{ type: "custom", customType: PSTACK_MODE_ENTRY_TYPE, data: { state: "ON" } },
+		]);
+		await onRuntime.emitSessionSwitch("fork");
+		expectPotetoStatus(onRuntime, "[P] poteto");
+	});
+
 });
 
 describe("pstack_task pure helpers", () => {

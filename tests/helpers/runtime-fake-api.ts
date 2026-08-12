@@ -39,10 +39,28 @@ export type SentMessage = {
 	options?: unknown;
 };
 
+/** OMP KeyId-compatible shortcut id (e.g. `ctrl+alt+p`). */
+export type FakeKeyId = string;
+
+export type SymbolPreset = "unicode" | "nerd" | "ascii";
+
+export type RegisteredShortcut = {
+	shortcut: FakeKeyId;
+	description?: string;
+	handler: (ctx: FakeCommandContext) => void | Promise<void>;
+};
+
 export type FakeCommandContext = {
 	ui: {
 		notify: (message: string, level?: string) => void;
 		confirm: (title: string, message: string) => Promise<boolean>;
+		/** Footer/status-bar projection. Pass undefined to clear. */
+		setStatus: (key: string, text: string | undefined) => void;
+		setEditorText: (text: string) => void;
+		getEditorText: () => string;
+		theme: {
+			getSymbolPreset: () => SymbolPreset;
+		};
 	};
 	cwd: string;
 	sessionManager: {
@@ -72,6 +90,13 @@ export type FakeExtensionAPI = {
 		options: {
 			description?: string;
 			handler: RegisteredCommand["handler"];
+		},
+	) => void;
+	registerShortcut: (
+		shortcut: FakeKeyId,
+		options: {
+			description?: string;
+			handler: RegisteredShortcut["handler"];
 		},
 	) => void;
 	registerTool: (tool: RegisteredTool) => void;
@@ -110,25 +135,36 @@ export type FakeRuntimeOptions = {
 	 * Defaults to 17.2.13 so green-gated init does not break unrelated runtime tests.
 	 */
 	version?: string | undefined;
+	/** Theme symbol preset exposed at `ctx.ui.theme.getSymbolPreset()`. Defaults to unicode. */
+	symbolPreset?: SymbolPreset;
+	/** Initial editor draft exposed at `ctx.ui.getEditorText()`. */
+	editorText?: string;
 };
 
 export type FakeRuntime = {
 	api: FakeExtensionAPI;
 	commands: Map<string, RegisteredCommand>;
+	shortcuts: Map<FakeKeyId, RegisteredShortcut>;
 	tools: Map<string, RegisteredTool>;
 	entries: CustomSessionEntry[];
 	sentMessages: SentMessage[];
 	notifications: Array<{ message: string; level?: string }>;
 	confirmCalls: Array<{ title: string; message: string }>;
+	/** Shared keyed status projection across all fake contexts. */
+	statuses: Map<string, string>;
 	handlers: Map<string, Array<(...args: unknown[]) => unknown>>;
 	setConfirmResult: (value: boolean) => void;
 	setParentModel: (model: FakeModel | undefined) => void;
 	setSettings: (settings: FakeSettingsLike | undefined) => void;
 	setGetAgentDir: (getAgentDir: (() => string) | undefined) => void;
 	setVersion: (version: string | undefined) => void;
+	setSymbolPreset: (preset: SymbolPreset) => void;
+	setEditorText: (text: string) => void;
+	getEditorText: () => string;
 	replaceEntries: (next: CustomSessionEntry[]) => void;
 	createContext: () => FakeCommandContext;
 	invokeCommand: (name: string, args?: string) => Promise<void>;
+	invokeShortcut: (shortcut: FakeKeyId) => Promise<void>;
 	emitSessionStart: () => Promise<void>;
 	emitSessionSwitch: (reason?: "new" | "resume" | "fork") => Promise<void>;
 	emitSessionBranch: () => Promise<void>;
@@ -141,11 +177,13 @@ export type FakeRuntime = {
 
 export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime {
 	const commands = new Map<string, RegisteredCommand>();
+	const shortcuts = new Map<FakeKeyId, RegisteredShortcut>();
 	const tools = new Map<string, RegisteredTool>();
 	const entries: CustomSessionEntry[] = [...(options.initialEntries ?? [])];
 	const sentMessages: SentMessage[] = [];
 	const notifications: Array<{ message: string; level?: string }> = [];
 	const confirmCalls: Array<{ title: string; message: string }> = [];
+	const statuses = new Map<string, string>();
 	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 	let confirmResult = options.confirmResult ?? true;
 	let parentModel = options.parentModel;
@@ -153,6 +191,8 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	let getAgentDir = options.getAgentDir;
 	// Default to the minimum supported OMP host so unrelated tests survive the VERSION gate.
 	let version: string | undefined = Object.hasOwn(options, "version") ? options.version : "17.2.13";
+	let symbolPreset: SymbolPreset = options.symbolPreset ?? "unicode";
+	let editorText = options.editorText ?? "";
 	const cwd = options.cwd ?? process.cwd();
 
 	const createContext = (): FakeCommandContext => ({
@@ -163,6 +203,24 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			async confirm(title, message) {
 				confirmCalls.push({ title, message });
 				return confirmResult;
+			},
+			setStatus(key, text) {
+				if (text === undefined) {
+					statuses.delete(key);
+				} else {
+					statuses.set(key, text);
+				}
+			},
+			setEditorText(text) {
+				editorText = text;
+			},
+			getEditorText() {
+				return editorText;
+			},
+			theme: {
+				getSymbolPreset() {
+					return symbolPreset;
+				},
 			},
 		},
 		cwd,
@@ -188,6 +246,10 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	const api: FakeExtensionAPI = {
 		registerCommand(name, opts) {
 			commands.set(name, { name, description: opts.description, handler: opts.handler });
+		},
+		registerShortcut(shortcut, opts) {
+			const key = shortcut.toLowerCase();
+			shortcuts.set(key, { shortcut: key, description: opts.description, handler: opts.handler });
 		},
 		registerTool(tool) {
 			tools.set(tool.name, tool);
@@ -236,11 +298,13 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	return {
 		api,
 		commands,
+		shortcuts,
 		tools,
 		entries,
 		sentMessages,
 		notifications,
 		confirmCalls,
+		statuses,
 		handlers,
 		setConfirmResult(value) {
 			confirmResult = value;
@@ -257,6 +321,15 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		setVersion(next) {
 			version = next;
 		},
+		setSymbolPreset(preset) {
+			symbolPreset = preset;
+		},
+		setEditorText(text) {
+			editorText = text;
+		},
+		getEditorText() {
+			return editorText;
+		},
 		replaceEntries(next) {
 			entries.splice(0, entries.length, ...next);
 		},
@@ -267,6 +340,14 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 				throw new Error(`Command not registered: ${name}`);
 			}
 			await command.handler(args, createContext());
+		},
+		async invokeShortcut(shortcut) {
+			const key = shortcut.toLowerCase();
+			const registered = shortcuts.get(key);
+			if (!registered) {
+				throw new Error(`Shortcut not registered: ${shortcut}`);
+			}
+			await registered.handler(createContext());
 		},
 		async emitSessionStart() {
 			await emitLifecycle("session_start", { type: "session_start" });
