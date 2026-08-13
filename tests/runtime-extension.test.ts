@@ -352,35 +352,36 @@ describe("omp-pstack runtime extension", () => {
 		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
 	});
 
-	test("registers ctrl+alt+p and only rewrites the visible editor draft", async () => {
+	test("registers ctrl+alt+o and only rewrites the visible editor draft", async () => {
 		loadExtension(runtime, { packageRoot, homeDir });
 
-		expect(runtime.shortcuts.has("ctrl+alt+p")).toBe(true);
+		expect(runtime.shortcuts.has("ctrl+alt+o")).toBe(true);
+		expect(runtime.shortcuts.has("ctrl+alt+p")).toBe(false);
 
 		runtime.setEditorText("");
-		await runtime.invokeShortcut("ctrl+alt+p");
+		await runtime.invokeShortcut("ctrl+alt+o");
 		expect(runtime.getEditorText()).toBe("/poteto-mode ");
 		expect(runtime.sentMessages).toEqual([]);
 		expect(latestModeEntry(runtime)).toBeUndefined();
 		expectPotetoStatus(runtime, undefined);
 
 		runtime.setEditorText("ship the watcher");
-		await runtime.invokeShortcut("ctrl+alt+p");
+		await runtime.invokeShortcut("ctrl+alt+o");
 		expect(runtime.getEditorText()).toBe("/poteto-mode ship the watcher");
 		expect(runtime.sentMessages).toEqual([]);
 		expect(latestModeEntry(runtime)).toBeUndefined();
 		expectPotetoStatus(runtime, undefined);
 
 		runtime.setEditorText("/poteto-mode");
-		await runtime.invokeShortcut("ctrl+alt+p");
+		await runtime.invokeShortcut("ctrl+alt+o");
 		expect(runtime.getEditorText()).toBe("/poteto-mode");
 
 		runtime.setEditorText("/poteto-mode already armed");
-		await runtime.invokeShortcut("ctrl+alt+p");
+		await runtime.invokeShortcut("ctrl+alt+o");
 		expect(runtime.getEditorText()).toBe("/poteto-mode already armed");
 
 		runtime.setEditorText("/poteto-mode ");
-		await runtime.invokeShortcut("ctrl+alt+p");
+		await runtime.invokeShortcut("ctrl+alt+o");
 		expect(runtime.getEditorText()).toBe("/poteto-mode ");
 
 		expect(runtime.sentMessages).toEqual([]);
