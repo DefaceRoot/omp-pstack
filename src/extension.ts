@@ -354,8 +354,8 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			});
 		}
 
-		pi.registerShortcut("ctrl+alt+p", {
-			description: "Prepare a Poteto mode prompt",
+		pi.registerShortcut("ctrl+alt+o", {
+			description: "Open a Poteto mode prompt",
 			handler(ctx) {
 				const draft = ctx.ui.getEditorText();
 				if (draft === POTETO_COMMAND || draft.startsWith(`${POTETO_COMMAND} `)) return;
