@@ -233,12 +233,15 @@ const MAX_ROSTER_DETAIL_LENGTH = 160;
 const MAX_ROSTER_COUNTER_LENGTH = 24;
 const ROSTER_CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
 
-/** Flatten child-reported text to one readable line so a row never breaks the roster layout. */
+/**
+ * Flatten roster text to one readable line so a row never breaks the layout.
+ * Length bounding belongs to the caller: child-reported detail is clamped,
+ * configured model selectors are shown byte-for-byte however long they are.
+ */
 function rosterText(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const text = value.replace(ROSTER_CONTROL_CHARACTER, " ").replace(/\s+/g, " ").trim();
-	if (text === "") return undefined;
-	return text.length > MAX_ROSTER_DETAIL_LENGTH ? `${text.slice(0, MAX_ROSTER_DETAIL_LENGTH)}...` : text;
+	return text === "" ? undefined : text;
 }
 
 function rosterCounter(value: unknown): string | undefined {
@@ -258,9 +261,14 @@ function rosterStateFor(progress: AssignmentProgress): RosterState {
 				const text = rosterText(source[field]);
 				if (text !== undefined && !details.includes(text)) details.push(text);
 			}
+			const joined = details.join(" | ");
+			let detail: string | undefined = joined === "" ? undefined : joined;
+			if (detail !== undefined && detail.length > MAX_ROSTER_DETAIL_LENGTH) {
+				detail = `${detail.slice(0, MAX_ROSTER_DETAIL_LENGTH)}...`;
+			}
 			return {
 				kind: "progress",
-				detail: details.length === 0 ? undefined : details.join(" | "),
+				detail,
 				requests: rosterCounter(source.requests),
 				tokens: rosterCounter(source.tokens),
 			};
@@ -590,7 +598,14 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 					model: rosterText(assignment.modelOverride) ?? "inherit-parent",
 					state: { kind: "queued" },
 				}));
-				asToolUpdate(onUpdate, rosterSnapshot(roster));
+				let publishedRoster: string | undefined;
+				const publishRoster = (): void => {
+					const snapshot = rosterSnapshot(roster);
+					if (snapshot === publishedRoster) return;
+					publishedRoster = snapshot;
+					asToolUpdate(onUpdate, snapshot);
+				};
+				publishRoster();
 				const results = await executeAssignments(assignments, {
 					runSubprocess,
 					cwd: ctx.cwd,
@@ -605,9 +620,16 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 						const row = roster[progress.index];
 						if (!row) return;
 						row.state = rosterStateFor(progress);
-						asToolUpdate(onUpdate, rosterSnapshot(roster));
+						publishRoster();
 					},
 				});
+				// A child cancelled while still queued never reports progress, so its only
+				// terminal signal is the returned result; reconcile every row from those.
+				for (const [index, result] of results.entries()) {
+					const row = roster[index];
+					if (row) row.state = { kind: "completed", exitCode: result.exitCode };
+				}
+				publishRoster();
 				const text = results
 					.map((result, index) => {
 						const logicalId = assignments[index]?.id ?? result.id;
