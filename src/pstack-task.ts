@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 export type ModelSelection = string | undefined;
 
 export type Assignment = {
@@ -272,7 +274,11 @@ export async function executeAssignments(
 	options: ExecuteAssignmentsOptions,
 ): Promise<AssignmentResult[]> {
 	const agent = assignmentAgent(options.agentPrompt);
-	const lifecycle = subprocessLifecycleOptions(options.lifecycle ?? { kind: "ephemeral" });
+	const lifecyclePolicy = options.lifecycle ?? { kind: "ephemeral" };
+	const lifecycle = subprocessLifecycleOptions(lifecyclePolicy);
+	const runtimeIdPrefix =
+		options.runtimeIdPrefix ??
+		(lifecyclePolicy.kind === "persisted" ? `pstack-${randomUUID()}` : undefined);
 	const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_CHILD_MAX_RUNTIME_MS;
 	const runAssignment = async (assignment: Assignment, index: number): Promise<AssignmentResult> => {
 		if (options.signal?.aborted) return cancelledResult(assignment.id);
@@ -281,7 +287,7 @@ export async function executeAssignments(
 		let result: AssignmentResult;
 		try {
 			result = await options.runSubprocess({
-				id: options.runtimeIdPrefix ? `${options.runtimeIdPrefix}-${index}` : assignment.id,
+				id: runtimeIdPrefix === undefined ? assignment.id : `${runtimeIdPrefix}-${index}`,
 				index,
 				task: assignment.task,
 				description: assignment.id,
