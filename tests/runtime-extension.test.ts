@@ -1180,15 +1180,23 @@ describe("pstack_task tool seam", () => {
 		}
 	});
 
-	test("repeated and concurrent logical ids get unique runtime ids while preserving logical ids in outputs", async () => {
+	test("repeated and concurrent logical ids get unique runtime ids prefixed by the safe logical id while preserving logical ids in outputs", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-ids-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-ids-home-"));
 		writePackageFixture(packageRoot);
 		const runtime = createFakeRuntime({ cwd: packageRoot });
 
-		const calls: Array<Record<string, unknown>> = [];
+		const collidingModel = "slice/custom-selector:v1+keep";
+		const panelAModel = "panel/custom-a:v2+keep";
+		const panelBModel = "panel/custom-b:v3+keep";
+
+		const calls: Array<{ id: string; task: string; modelOverride: unknown }> = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
-			calls.push({ id: options.id, task: options.task });
+			calls.push({
+				id: options.id,
+				task: options.task,
+				modelOverride: options.modelOverride,
+			});
 			await Bun.sleep(15);
 			// Native runner echoes its runtime registry id; tool details must still
 			// remap results[].id back to the requested logical assignment id.
@@ -1211,7 +1219,7 @@ describe("pstack_task tool seam", () => {
 				if (runtimeId !== undefined) {
 					expect(typeof runtimeId).toBe("string");
 					expect(runtimeIdsForCall).toContain(runtimeId);
-					expect(runtimeId).not.toBe(logicalId);
+					expect(runtimeId).toMatch(new RegExp(`^${logicalId}`));
 				}
 			}
 		};
@@ -1228,7 +1236,7 @@ describe("pstack_task tool seam", () => {
 						{ id: "Main", task: "first-main" },
 						{ id: "Main", task: "second-main" },
 					],
-					model: "m1",
+					model: collidingModel,
 				},
 				undefined,
 				undefined,
@@ -1238,14 +1246,14 @@ describe("pstack_task tool seam", () => {
 			const [panelA, panelB] = await Promise.all([
 				tool.execute(
 					"call-panel-a",
-					{ strategy: "panel", prompt: "panel-a", models: ["m1"] },
+					{ strategy: "panel", prompt: "panel-a", models: [panelAModel] },
 					undefined,
 					undefined,
 					runtime.createContext(),
 				),
 				tool.execute(
 					"call-panel-b",
-					{ strategy: "panel", prompt: "panel-b", models: ["m2"] },
+					{ strategy: "panel", prompt: "panel-b", models: [panelBModel] },
 					undefined,
 					undefined,
 					runtime.createContext(),
@@ -1258,6 +1266,16 @@ describe("pstack_task tool seam", () => {
 			// Unique native runtime IDs are observable only via injected runSubprocess.
 			expect(runtimeIds.includes("Main")).toBe(false);
 			expect(runtimeIds.filter((id) => id === "panel-0")).toHaveLength(0);
+
+			const launchByTask = new Map(calls.map((call) => [call.task, call]));
+			expect(launchByTask.get("first-main")?.id).toMatch(/^Main/);
+			expect(launchByTask.get("second-main")?.id).toMatch(/^Main/);
+			expect(launchByTask.get("panel-a")?.id).toMatch(/^panel-0/);
+			expect(launchByTask.get("panel-b")?.id).toMatch(/^panel-0/);
+			expect(launchByTask.get("first-main")?.modelOverride).toBe(collidingModel);
+			expect(launchByTask.get("second-main")?.modelOverride).toBe(collidingModel);
+			expect(launchByTask.get("panel-a")?.modelOverride).toBe(panelAModel);
+			expect(launchByTask.get("panel-b")?.modelOverride).toBe(panelBModel);
 
 			const collidingText = toolResultText(colliding);
 			expect(collidingText).toContain("Main");
@@ -1647,19 +1665,24 @@ describe("pstack_task tool seam", () => {
 		}
 	});
 
-	test("pstack_task forwards persisted or ephemeral child lifecycle, a 600000ms default cap, and deadline abort", async () => {
+	test("pstack_task forwards persisted or ephemeral child lifecycle without a plugin maxRuntimeMs and with the exact parent signal", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-lifecycle-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-lifecycle-home-"));
 		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-lifecycle-art-"));
 		writePackageFixture(packageRoot);
+
+		const persistedModel = "persist/custom-selector:v1+keep";
+		const ephemeralModel = "ephem/custom-selector:v2+keep";
 
 		type ChildLaunch = {
 			keepAlive: unknown;
 			artifactsDir: unknown;
 			hasArtifactsDir: boolean;
 			parentToolCallId: unknown;
+			hasMaxRuntimeMs: boolean;
 			maxRuntimeMs: unknown;
 			signal?: AbortSignal;
+			modelOverride: unknown;
 		};
 
 		const recordLaunch = (options: Parameters<RunSubprocessFn>[0]): ChildLaunch => {
@@ -1668,19 +1691,51 @@ describe("pstack_task tool seam", () => {
 				artifactsDir?: unknown;
 				parentToolCallId?: unknown;
 				maxRuntimeMs?: unknown;
+				modelOverride?: unknown;
 			};
 			return {
 				keepAlive: rec.keepAlive,
 				artifactsDir: rec.artifactsDir,
 				hasArtifactsDir: Object.hasOwn(rec, "artifactsDir"),
 				parentToolCallId: rec.parentToolCallId,
+				hasMaxRuntimeMs: Object.hasOwn(rec, "maxRuntimeMs"),
 				maxRuntimeMs: rec.maxRuntimeMs,
 				signal: rec.signal,
+				modelOverride: rec.modelOverride,
 			};
+		};
+
+		const expectChildLaunch = (
+			launch: ChildLaunch | undefined,
+			expected: {
+				keepAlive: boolean;
+				artifactsDir?: string;
+				hasArtifactsDir: boolean;
+				parentToolCallId: string;
+				parentSignal: AbortSignal;
+				modelOverride: string;
+			},
+		): void => {
+			expect(launch).toBeDefined();
+			expect(launch?.keepAlive).toBe(expected.keepAlive);
+			expect(launch?.hasArtifactsDir).toBe(expected.hasArtifactsDir);
+			expect(launch?.artifactsDir).toBe(expected.artifactsDir);
+			expect(launch?.parentToolCallId).toBe(expected.parentToolCallId);
+			// Capture the live launch object; do not grep production source for the selector.
+			expect(launch?.modelOverride).toBe(expected.modelOverride);
+			expect({
+				hasMaxRuntimeMs: launch?.hasMaxRuntimeMs,
+				maxRuntimeMs: launch?.maxRuntimeMs,
+			}).toEqual({
+				hasMaxRuntimeMs: false,
+				maxRuntimeMs: undefined,
+			});
+			expect(launch?.signal).toBe(expected.parentSignal);
 		};
 
 		try {
 			const persistedCalls: ChildLaunch[] = [];
+			const persistedParentSignal = new AbortController().signal;
 			const persistedRuntime = createFakeRuntime({
 				cwd: packageRoot,
 				artifactsDir,
@@ -1696,20 +1751,25 @@ describe("pstack_task tool seam", () => {
 				{
 					strategy: "slice",
 					slices: [{ id: "persist-a", task: "revive me" }],
-					model: "m1",
+					model: persistedModel,
 				},
-				undefined,
+				persistedParentSignal,
 				undefined,
 				persistedRuntime.createContext(),
 			);
 			expect(toolResultText(persistedResult)).toContain("ok-persisted");
 			expect(persistedCalls).toHaveLength(1);
-			expect(persistedCalls[0]?.keepAlive).toBe(true);
-			expect(persistedCalls[0]?.artifactsDir).toBe(artifactsDir);
-			expect(persistedCalls[0]?.parentToolCallId).toBe("call-persisted");
-			expect(persistedCalls[0]?.maxRuntimeMs).toBe(600000);
+			expectChildLaunch(persistedCalls[0], {
+				keepAlive: true,
+				artifactsDir,
+				hasArtifactsDir: true,
+				parentToolCallId: "call-persisted",
+				parentSignal: persistedParentSignal,
+				modelOverride: persistedModel,
+			});
 
 			const ephemeralCalls: ChildLaunch[] = [];
+			const ephemeralParentSignal = new AbortController().signal;
 			const ephemeralRuntime = createFakeRuntime({ cwd: packageRoot });
 			const ephemeralRunner: RunSubprocessFn = async (options) => {
 				ephemeralCalls.push(recordLaunch(options));
@@ -1722,73 +1782,21 @@ describe("pstack_task tool seam", () => {
 				{
 					strategy: "slice",
 					slices: [{ id: "ephem-a", task: "do not persist" }],
-					model: "m1",
+					model: ephemeralModel,
 				},
-				undefined,
+				ephemeralParentSignal,
 				undefined,
 				ephemeralRuntime.createContext(),
 			);
 			expect(toolResultText(ephemeralResult)).toContain("ok-ephemeral");
 			expect(ephemeralCalls).toHaveLength(1);
-			expect(ephemeralCalls[0]?.keepAlive).toBe(false);
-			expect(ephemeralCalls[0]?.hasArtifactsDir).toBe(false);
-			expect(ephemeralCalls[0]?.artifactsDir).toBeUndefined();
-			expect(ephemeralCalls[0]?.parentToolCallId).toBe("call-ephemeral");
-			expect(ephemeralCalls[0]?.maxRuntimeMs).toBe(600000);
-
-			const deadlineMs = 40;
-			const safetyMs = 400;
-			const deadlineRuntime = createFakeRuntime({ cwd: packageRoot });
-			const hungRunner: RunSubprocessFn = async (options) => {
-				const signal = options.signal;
-				if (!signal) {
-					await Bun.sleep(10_000);
-					return { exitCode: 0, id: options.id, output: "hung-without-signal" };
-				}
-				if (!signal.aborted) {
-					await new Promise<void>((resolve) => {
-						signal.addEventListener("abort", () => resolve(), { once: true });
-					});
-				}
-				return { exitCode: 130, id: options.id, error: "Cancelled" };
-			};
-			loadExtension(deadlineRuntime, {
-				packageRoot,
-				homeDir,
-				runSubprocess: hungRunner,
-				deadlineMs,
+			expectChildLaunch(ephemeralCalls[0], {
+				keepAlive: false,
+				hasArtifactsDir: false,
+				parentToolCallId: "call-ephemeral",
+				parentSignal: ephemeralParentSignal,
+				modelOverride: ephemeralModel,
 			});
-			const deadlineTool = deadlineRuntime.tools.get("pstack_task")!;
-			const started = Date.now();
-			const deadlineResult = await Promise.race([
-				deadlineTool.execute(
-					"call-deadline",
-					{
-						strategy: "slice",
-						slices: [{ id: "hung-a", task: "settle only after abort" }],
-						model: "m1",
-					},
-					undefined,
-					undefined,
-					deadlineRuntime.createContext(),
-				),
-				Bun.sleep(safetyMs).then(() => {
-					throw new Error(
-						`pstack_task hung past ${safetyMs}ms; missing deadlineMs abort on the child AbortSignal`,
-					);
-				}),
-			]);
-			expect(Date.now() - started).toBeLessThan(safetyMs);
-			const deadlineText = toolResultText(deadlineResult);
-			expect(deadlineText).toMatch(/hung-a: exit 130/);
-			expect(deadlineText).toMatch(/cancel/i);
-			const deadlineDetails = resultDetails(deadlineResult);
-			const deadlineResults = Array.isArray(deadlineDetails.results)
-				? (deadlineDetails.results as Array<{ exitCode?: number; error?: string }>)
-				: [];
-			expect(deadlineResults).toHaveLength(1);
-			expect(deadlineResults[0]?.exitCode).toBe(130);
-			expect(String(deadlineResults[0]?.error ?? "")).toMatch(/cancel/i);
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
@@ -1796,18 +1804,21 @@ describe("pstack_task tool seam", () => {
 		}
 	});
 
-	test("persisted pstack_task with a traversal toolCallId forwards a filesystem-safe opaque child runtime id", async () => {
+	test("persisted pstack_task with a traversal toolCallId forwards a filesystem-safe child runtime id prefixed by the safe logical id", async () => {
 		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-safe-id-"));
 		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-safe-id-home-"));
 		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-safe-id-art-"));
 		writePackageFixture(packageRoot);
 
 		const hostileToolCallId = "../sessions/../../tmp/pstack-evil";
+		const logicalId = "child-a";
+		const configuredModel = "safe/custom-selector:v1+keep";
 		const launches: Array<{
 			id: string;
 			parentToolCallId: unknown;
 			task: string;
 			description?: string;
+			modelOverride: unknown;
 		}> = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			launches.push({
@@ -1815,6 +1826,7 @@ describe("pstack_task tool seam", () => {
 				parentToolCallId: (options as { parentToolCallId?: unknown }).parentToolCallId,
 				task: options.task,
 				description: options.description,
+				modelOverride: options.modelOverride,
 			});
 			return { exitCode: 0, id: options.id, output: "ok-safe-id" };
 		};
@@ -1827,8 +1839,8 @@ describe("pstack_task tool seam", () => {
 				hostileToolCallId,
 				{
 					strategy: "slice",
-					slices: [{ id: "child-a", task: "persist under a safe runtime id" }],
-					model: "m1",
+					slices: [{ id: logicalId, task: "persist under a safe runtime id" }],
+					model: configuredModel,
 				},
 				undefined,
 				undefined,
@@ -1839,6 +1851,8 @@ describe("pstack_task tool seam", () => {
 			expect(launches).toHaveLength(1);
 			const launch = launches[0]!;
 			expect(launch.parentToolCallId).toBe(hostileToolCallId);
+			expect(launch.modelOverride).toBe(configuredModel);
+			expect(launch.id).toMatch(new RegExp(`^${logicalId}`));
 			expect(launch.id.includes("/") || launch.id.includes("\\") || launch.id.includes("..")).toBe(false);
 			expect(launch.id.includes(hostileToolCallId)).toBe(false);
 			expect(launch.task.includes(hostileToolCallId)).toBe(false);
@@ -1860,6 +1874,8 @@ describe("pstack_task tool seam", () => {
 	test("direct persisted executeAssignments never reuses an untrusted assignment id as an artifact path", async () => {
 		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-direct-persist-id-"));
 		const hostileIds = ["../../outside", "..\\windows\\outside"] as const;
+		const modelOverrides = ["direct/selector-0:keep", "direct/selector-1:keep"] as const;
+		const parentSignal = new AbortController().signal;
 		const launches: RunSubprocessOptions[] = [];
 		const runSubprocess: RunSubprocessFn = async (options) => {
 			launches.push(options);
@@ -1868,10 +1884,15 @@ describe("pstack_task tool seam", () => {
 
 		try {
 			const results = await executeAssignments(
-				hostileIds.map((id, index) => ({ id, task: `hostile-${index}` })),
+				hostileIds.map((id, index) => ({
+					id,
+					task: `hostile-${index}`,
+					modelOverride: modelOverrides[index],
+				})),
 				{
 					runSubprocess,
 					cwd: process.cwd(),
+					signal: parentSignal,
 					lifecycle: { kind: "persisted", artifactsDir },
 				},
 			);
@@ -1883,6 +1904,8 @@ describe("pstack_task tool seam", () => {
 			for (const [index, launch] of launches.entries()) {
 				const rawId = hostileIds[index]!;
 				expect(launch.id).not.toBe(rawId);
+				expect(launch.id.startsWith(rawId)).toBe(false);
+				expect(launch.id.includes(rawId)).toBe(false);
 				expect(launch.id.includes("/")).toBe(false);
 				expect(launch.id.includes("\\")).toBe(false);
 				expect(launch.id.includes("..")).toBe(false);
@@ -1895,6 +1918,8 @@ describe("pstack_task tool seam", () => {
 
 				expect(launch.description).toBe(rawId);
 				expect(launch.id).not.toBe(launch.description);
+				expect(launch.modelOverride).toBe(modelOverrides[index]);
+				expect(launch.signal).toBe(parentSignal);
 			}
 
 			expect(results.map((result) => result.id)).toEqual([...hostileIds]);
