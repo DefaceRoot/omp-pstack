@@ -20,7 +20,7 @@ const PSTACK_RESERVED_FOR_MODELS =
 const SWARM_RACE_PANEL =
 	/identical-brief race[\s\S]{0,200}strategy:\s*"panel"|strategy:\s*"panel"[\s\S]{0,200}identical-brief race/;
 const CROSS_FAMILY_MODEL_SELECTION =
-	/different model family|validated selector|model-selected|per-arm model/i;
+	/different model family|different-family|cross-family/i;
 const HUB_PARKS_CHILDREN = /`hub`[\s\S]{0,80}park/i;
 const CHILDREN_PARK_AUTOMATICALLY = /children park automatically/i;
 const DEAD_NATIVE_ROUTING_SELECTORS = [
@@ -156,7 +156,7 @@ function modelSelectedPstackViolations(
 	if (!CROSS_FAMILY_MODEL_SELECTION.test(block)) {
 		violations.push(`${label}: missing cross-family model selection`);
 	}
-	if (/call native `task`/i.test(block) && !PSTACK_TASK.test(block)) {
+	if (/call native `task`/i.test(block)) {
 		violations.push(`${label}: must not route through native task`);
 	}
 	return violations;
@@ -361,6 +361,49 @@ describe("native-first task routing in packaged guidance", () => {
 		);
 
 		expect(violations).toEqual([]);
+	});
+
+	test("AuditTrail pstack helper rejects ambiguous selectors and hybrid native routing", () => {
+		const ambiguousSelector =
+			"Call `pstack_task` with a validated selector. This is a model-selected review.";
+		const hybridNativeAndPstack =
+			"Call native `task` and `pstack_task` with a validated selector from a different model family.";
+		const auditTrail = headingBlock(
+			readSeam("skills/show-me-your-work/SKILL.md"),
+			"## Cross-model review of the trail",
+		);
+
+		const ambiguousViolations = modelSelectedPstackViolations(
+			"ambiguous-selector",
+			ambiguousSelector,
+		);
+		const hybridViolations = modelSelectedPstackViolations(
+			"hybrid-native-pstack",
+			hybridNativeAndPstack,
+		);
+
+		expect(ambiguousViolations).toContain(
+			"ambiguous-selector: missing cross-family model selection",
+		);
+		expect(
+			ambiguousViolations.some((violation) =>
+				violation.includes("must not route through native task"),
+			),
+		).toBe(false);
+		expect(hybridViolations).toContain(
+			"hybrid-native-pstack: must not route through native task",
+		);
+		expect(
+			hybridViolations.some((violation) =>
+				violation.includes("missing cross-family model selection"),
+			),
+		).toBe(false);
+		expect(
+			modelSelectedPstackViolations(
+				"skills/show-me-your-work/SKILL.md AuditTrail cross-family review",
+				auditTrail,
+			),
+		).toEqual([]);
 	});
 
 	test("setup-pstack no longer offers or writes selectors made dead by native routing", () => {
