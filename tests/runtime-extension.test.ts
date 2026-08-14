@@ -508,10 +508,68 @@ describe("pstack_task pure helpers", () => {
 			cwd: process.cwd(),
 		});
 
-		expect(started.sort()).toEqual(["panel-0", "panel-1", "panel-2"]);
+		const logicalIds = ["panel-0", "panel-1", "panel-2"] as const;
+		expect(started).toHaveLength(logicalIds.length);
+		expect(new Set(started).size).toBe(logicalIds.length);
+		for (const logicalId of logicalIds) {
+			const runtimeId = started.find((id) => id.startsWith(`${logicalId}-`));
+			expect(runtimeId).toBeDefined();
+			expect(runtimeId).not.toBe(logicalId);
+		}
 		expect(maxActive).toBeGreaterThan(1);
 		expect(results).toHaveLength(3);
+		expect(results.map((result) => result.id)).toEqual([...logicalIds]);
 		expect(results.every((result) => result.exitCode === 0)).toBe(true);
+	});
+
+	test("long safe logical ids are truncated to a conservative visible prefix while runtime ids stay unique and filesystem-safe", async () => {
+		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-long-id-"));
+		const logicalId = `SafeLong_${"x".repeat(240)}`;
+		const modelOverride = "long/custom-selector:v1+keep";
+		const launches: RunSubprocessOptions[] = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			launches.push(options);
+			return { exitCode: 0, id: options.id, output: `ok:${options.task}` };
+		};
+
+		try {
+			const results = await executeAssignments(
+				[
+					{ id: logicalId, task: "first-long", modelOverride },
+					{ id: logicalId, task: "second-long", modelOverride },
+				],
+				{
+					runSubprocess,
+					cwd: process.cwd(),
+					lifecycle: { kind: "persisted", artifactsDir },
+				},
+			);
+
+			expect(launches).toHaveLength(2);
+			const runtimeIds = launches.map((launch) => launch.id);
+			expect(new Set(runtimeIds).size).toBe(2);
+
+			const conservativePrefix = logicalId.slice(0, 16);
+			for (const launch of launches) {
+				expect(launch.id.length).toBeLessThanOrEqual(250);
+				expect(`${launch.id}.jsonl`.length).toBeLessThanOrEqual(255);
+				expect(launch.id.startsWith(conservativePrefix)).toBe(true);
+				expect(launch.id.startsWith(logicalId)).toBe(false);
+				expect(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(launch.id)).toBe(true);
+				expect(launch.id.includes("/") || launch.id.includes("\\") || launch.id.includes("..")).toBe(false);
+				expect(isAbsolute(launch.id)).toBe(false);
+				expect(launch.modelOverride).toBe(modelOverride);
+
+				const resolvedArtifacts = resolve(artifactsDir);
+				const resolvedArtifact = resolve(artifactsDir, `${launch.id}.jsonl`);
+				const rel = relative(resolvedArtifacts, resolvedArtifact);
+				expect(rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel)).toBe(true);
+			}
+
+			expect(results.map((result) => result.id)).toEqual([logicalId, logicalId]);
+		} finally {
+			rmSync(artifactsDir, { recursive: true, force: true });
+		}
 	});
 });
 
