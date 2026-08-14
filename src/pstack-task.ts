@@ -265,6 +265,7 @@ function subprocessLifecycleOptions(policy: ChildLifecyclePolicy): SubprocessLif
 }
 
 const SAFE_LOGICAL_RUNTIME_ID_PREFIX = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const MAX_LOGICAL_RUNTIME_ID_PREFIX_LENGTH = 64;
 
 /** Execute every assignment immediately and retain input order in the returned details. */
 export async function executeAssignments(
@@ -277,7 +278,9 @@ export async function executeAssignments(
 	const invocationId = randomUUID();
 	const runAssignment = async (assignment: Assignment, index: number): Promise<AssignmentResult> => {
 		if (options.signal?.aborted) return cancelledResult(assignment.id);
-		const prefix = SAFE_LOGICAL_RUNTIME_ID_PREFIX.test(assignment.id) ? assignment.id : "pstack";
+		const prefix = SAFE_LOGICAL_RUNTIME_ID_PREFIX.test(assignment.id)
+			? assignment.id.slice(0, MAX_LOGICAL_RUNTIME_ID_PREFIX_LENGTH)
+			: "pstack";
 		const runtimeId = `${prefix}-${invocationId}-${index}`;
 
 		options.onProgress?.({ id: assignment.id, index, state: "started" });
