@@ -6,10 +6,12 @@ import {
 	createLiveConcurrencyLimiter,
 	executeAssignments,
 	expandAssignments,
+	type AssignmentProgress,
 	type AssignmentRequest,
 	type AssignmentResult,
 	type ChildLifecyclePolicy,
 	type RunSubprocessFn,
+	type SubprocessProgress,
 } from "./pstack-task.ts";
 
 const DIRECT_SKILLS = [
@@ -211,6 +213,97 @@ function frameResultLines(channel: "output" | "error" | "stderr", text: string):
 		return `\\u${code.toString(16).padStart(4, "0")}`;
 	});
 	return prefix + framed;
+}
+
+/** One roster row's lifecycle, carrying only the detail its state can actually report. */
+type RosterState =
+	| { kind: "queued" }
+	| { kind: "started" }
+	| { kind: "progress"; detail?: string; requests?: string; tokens?: string }
+	| { kind: "completed"; exitCode: number | undefined };
+
+type RosterRow = {
+	id: string;
+	model: string;
+	state: RosterState;
+};
+
+const ROSTER_DETAIL_FIELDS = ["status", "lastIntent", "currentTool", "message"] as const;
+const MAX_ROSTER_DETAIL_LENGTH = 160;
+const MAX_ROSTER_COUNTER_LENGTH = 24;
+const ROSTER_CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/** Flatten child-reported text to one readable line so a row never breaks the roster layout. */
+function rosterText(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const text = value.replace(ROSTER_CONTROL_CHARACTER, " ").replace(/\s+/g, " ").trim();
+	if (text === "") return undefined;
+	return text.length > MAX_ROSTER_DETAIL_LENGTH ? `${text.slice(0, MAX_ROSTER_DETAIL_LENGTH)}...` : text;
+}
+
+function rosterCounter(value: unknown): string | undefined {
+	if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
+	const text = rosterText(value);
+	return text !== undefined && text.length <= MAX_ROSTER_COUNTER_LENGTH ? text : undefined;
+}
+
+function rosterStateFor(progress: AssignmentProgress): RosterState {
+	switch (progress.state) {
+		case "started":
+			return { kind: "started" };
+		case "progress": {
+			const source: SubprocessProgress = progress.progress ?? {};
+			const details: string[] = [];
+			for (const field of ROSTER_DETAIL_FIELDS) {
+				const text = rosterText(source[field]);
+				if (text !== undefined && !details.includes(text)) details.push(text);
+			}
+			return {
+				kind: "progress",
+				detail: details.length === 0 ? undefined : details.join(" | "),
+				requests: rosterCounter(source.requests),
+				tokens: rosterCounter(source.tokens),
+			};
+		}
+		case "completed":
+			return { kind: "completed", exitCode: progress.result?.exitCode };
+	}
+}
+
+/** Every update is a whole-roster snapshot: one row per assignment, newest state in place. */
+function rosterSnapshot(rows: readonly RosterRow[]): string {
+	let finished = 0;
+	let inFlight = 0;
+	const lines: string[] = [];
+	for (const row of rows) {
+		if (row.state.kind === "completed") finished += 1;
+		else if (row.state.kind !== "queued") inFlight += 1;
+		lines.push(renderRosterRow(row));
+	}
+	let headline = `P-Stack: ${finished}/${rows.length} assignment(s) finished, ${inFlight} in flight.`;
+	if (finished === 0 && inFlight === 0) headline = `Launching ${rows.length} P-Stack assignment(s)...`;
+	else if (finished === rows.length) headline = `P-Stack finished ${rows.length} assignment(s).`;
+	return [headline, ...lines].join("\n");
+}
+
+function renderRosterRow(row: RosterRow): string {
+	const head = `  ${row.id} [${row.model}]`;
+	switch (row.state.kind) {
+		case "queued":
+			return `${head} queued`;
+		case "started":
+			return `${head} started`;
+		case "progress": {
+			const counters: string[] = [];
+			if (row.state.requests !== undefined) counters.push(`requests ${row.state.requests}`);
+			if (row.state.tokens !== undefined) counters.push(`tokens ${row.state.tokens}`);
+			let line = `${head} progress`;
+			if (counters.length > 0) line += ` (${counters.join(", ")})`;
+			return row.state.detail === undefined ? line : `${line}: ${row.state.detail}`;
+		}
+		case "completed":
+			return `${head} completed exit ${row.state.exitCode ?? "?"}`;
+	}
 }
 
 function activeModelSelector(ctx: CommandContext): string | undefined {
@@ -492,7 +585,12 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 					// Installed content may intentionally omit internal agent definitions.
 				}
 
-				asToolUpdate(onUpdate, `Launching ${assignments.length} P-Stack assignment(s)...`);
+				const roster: RosterRow[] = assignments.map((assignment) => ({
+					id: assignment.id,
+					model: rosterText(assignment.modelOverride) ?? "inherit-parent",
+					state: { kind: "queued" },
+				}));
+				asToolUpdate(onUpdate, rosterSnapshot(roster));
 				const results = await executeAssignments(assignments, {
 					runSubprocess,
 					cwd: ctx.cwd,
@@ -504,9 +602,10 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 					parentToolCallId: toolCallId,
 					lifecycle: childLifecyclePolicy(ctx),
 					onProgress(progress) {
-						if (progress.state === "completed") {
-							asToolUpdate(onUpdate, `Completed ${progress.id} (exit ${progress.result?.exitCode ?? "?"}).`);
-						}
+						const row = roster[progress.index];
+						if (!row) return;
+						row.state = rosterStateFor(progress);
+						asToolUpdate(onUpdate, rosterSnapshot(roster));
 					},
 				});
 				const text = results
