@@ -49,7 +49,6 @@ type RunSubprocessBaseOptions = {
 	cwd: string;
 	modelOverride?: string;
 	parentToolCallId?: string;
-	maxRuntimeMs: number;
 	signal?: AbortSignal;
 	onProgress?: (progress: SubprocessProgress) => void;
 	modelRegistry?: unknown;
@@ -107,14 +106,11 @@ export type ExecuteAssignmentsOptions = {
 	modelRegistry?: unknown;
 	settings?: unknown;
 	agentPrompt?: string;
-	runtimeIdPrefix?: string;
 	schedule?: AssignmentScheduler;
 	parentToolCallId?: string;
-	maxRuntimeMs?: number;
 	lifecycle?: ChildLifecyclePolicy;
 };
 
-export const DEFAULT_CHILD_MAX_RUNTIME_MS = 600_000;
 const DEFAULT_TASK_MAX_CONCURRENCY = 32;
 
 function normalizedConcurrency(value: unknown): number {
@@ -268,6 +264,8 @@ function subprocessLifecycleOptions(policy: ChildLifecyclePolicy): SubprocessLif
 	}
 }
 
+const SAFE_LOGICAL_RUNTIME_ID_PREFIX = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 /** Execute every assignment immediately and retain input order in the returned details. */
 export async function executeAssignments(
 	assignments: readonly Assignment[],
@@ -276,25 +274,23 @@ export async function executeAssignments(
 	const agent = assignmentAgent(options.agentPrompt);
 	const lifecyclePolicy = options.lifecycle ?? { kind: "ephemeral" };
 	const lifecycle = subprocessLifecycleOptions(lifecyclePolicy);
-	const runtimeIdPrefix =
-		options.runtimeIdPrefix ??
-		(lifecyclePolicy.kind === "persisted" ? `pstack-${randomUUID()}` : undefined);
-	const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_CHILD_MAX_RUNTIME_MS;
+	const invocationId = randomUUID();
 	const runAssignment = async (assignment: Assignment, index: number): Promise<AssignmentResult> => {
 		if (options.signal?.aborted) return cancelledResult(assignment.id);
+		const prefix = SAFE_LOGICAL_RUNTIME_ID_PREFIX.test(assignment.id) ? assignment.id : "pstack";
+		const runtimeId = `${prefix}-${invocationId}-${index}`;
 
 		options.onProgress?.({ id: assignment.id, index, state: "started" });
 		let result: AssignmentResult;
 		try {
 			result = await options.runSubprocess({
-				id: runtimeIdPrefix === undefined ? assignment.id : `${runtimeIdPrefix}-${index}`,
+				id: runtimeId,
 				index,
 				task: assignment.task,
 				description: assignment.id,
 				cwd: options.cwd,
 				modelOverride: assignment.modelOverride,
 				parentToolCallId: options.parentToolCallId,
-				maxRuntimeMs,
 				...lifecycle,
 				signal: options.signal,
 				onProgress: (progress) =>
