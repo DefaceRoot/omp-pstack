@@ -30,6 +30,7 @@ import {
 	expandAssignments,
 	resolveModelOverride,
 	type RunSubprocessFn,
+	type RunSubprocessOptions,
 } from "../src/pstack-task.ts";
 
 // Fixture skill body must be longer than the sticky reminder so the
@@ -1852,6 +1853,52 @@ describe("pstack_task tool seam", () => {
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
+			rmSync(artifactsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("direct persisted executeAssignments never reuses an untrusted assignment id as an artifact path", async () => {
+		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-direct-persist-id-"));
+		const hostileIds = ["../../outside", "..\\windows\\outside"] as const;
+		const launches: RunSubprocessOptions[] = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			launches.push(options);
+			return { exitCode: 0, id: options.id, output: `ok:${options.task}` };
+		};
+
+		try {
+			const results = await executeAssignments(
+				hostileIds.map((id, index) => ({ id, task: `hostile-${index}` })),
+				{
+					runSubprocess,
+					cwd: process.cwd(),
+					lifecycle: { kind: "persisted", artifactsDir },
+				},
+			);
+
+			expect(launches).toHaveLength(2);
+			const runtimeIds = launches.map((launch) => launch.id);
+			expect(new Set(runtimeIds).size).toBe(2);
+
+			for (const [index, launch] of launches.entries()) {
+				const rawId = hostileIds[index]!;
+				expect(launch.id).not.toBe(rawId);
+				expect(launch.id.includes("/")).toBe(false);
+				expect(launch.id.includes("\\")).toBe(false);
+				expect(launch.id.includes("..")).toBe(false);
+				expect(isAbsolute(launch.id)).toBe(false);
+
+				const resolvedArtifacts = resolve(artifactsDir);
+				const resolvedArtifact = resolve(artifactsDir, `${launch.id}.jsonl`);
+				const rel = relative(resolvedArtifacts, resolvedArtifact);
+				expect(rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel)).toBe(true);
+
+				expect(launch.description).toBe(rawId);
+				expect(launch.id).not.toBe(launch.description);
+			}
+
+			expect(results.map((result) => result.id)).toEqual([...hostileIds]);
+		} finally {
 			rmSync(artifactsDir, { recursive: true, force: true });
 		}
 	});
