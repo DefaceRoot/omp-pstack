@@ -31,12 +31,23 @@ export type SubprocessProgress = {
 	[key: string]: unknown;
 };
 
-export type RunSubprocessOptions = {
+export type ChildLifecyclePolicy =
+	| { kind: "persisted"; artifactsDir: string }
+	| { kind: "ephemeral" };
+
+type SubprocessLifecycleOptions =
+	| { keepAlive: true; artifactsDir: string }
+	| { keepAlive: false; artifactsDir?: never };
+
+type RunSubprocessBaseOptions = {
 	id: string;
 	index: number;
 	task: string;
+	description: string;
 	cwd: string;
 	modelOverride?: string;
+	parentToolCallId?: string;
+	maxRuntimeMs: number;
 	signal?: AbortSignal;
 	onProgress?: (progress: SubprocessProgress) => void;
 	modelRegistry?: unknown;
@@ -54,6 +65,8 @@ export type RunSubprocessOptions = {
 	preloadedExtensionPaths?: string[];
 	preloadedCustomToolPaths?: string[];
 };
+
+export type RunSubprocessOptions = RunSubprocessBaseOptions & SubprocessLifecycleOptions;
 
 type AgentDefinition = NonNullable<RunSubprocessOptions["agent"]>;
 
@@ -81,7 +94,6 @@ export type AssignmentProgress = {
 };
 export type AssignmentScheduler = <T>(operation: () => Promise<T>) => Promise<T>;
 
-
 export type ExecuteAssignmentsOptions = {
 	runSubprocess: RunSubprocessFn;
 	cwd: string;
@@ -92,8 +104,12 @@ export type ExecuteAssignmentsOptions = {
 	agentPrompt?: string;
 	runtimeIdPrefix?: string;
 	schedule?: AssignmentScheduler;
+	parentToolCallId?: string;
+	maxRuntimeMs?: number;
+	lifecycle?: ChildLifecyclePolicy;
 };
 
+export const DEFAULT_CHILD_MAX_RUNTIME_MS = 600_000;
 const DEFAULT_TASK_MAX_CONCURRENCY = 32;
 
 function normalizedConcurrency(value: unknown): number {
@@ -204,12 +220,23 @@ function assignmentAgent(agentPrompt: string | undefined): AgentDefinition {
 	};
 }
 
+function subprocessLifecycleOptions(policy: ChildLifecyclePolicy): SubprocessLifecycleOptions {
+	switch (policy.kind) {
+		case "persisted":
+			return { artifactsDir: policy.artifactsDir, keepAlive: true };
+		case "ephemeral":
+			return { keepAlive: false };
+	}
+}
+
 /** Execute every assignment immediately and retain input order in the returned details. */
 export async function executeAssignments(
 	assignments: readonly Assignment[],
 	options: ExecuteAssignmentsOptions,
 ): Promise<AssignmentResult[]> {
 	const agent = assignmentAgent(options.agentPrompt);
+	const lifecycle = subprocessLifecycleOptions(options.lifecycle ?? { kind: "ephemeral" });
+	const maxRuntimeMs = options.maxRuntimeMs ?? DEFAULT_CHILD_MAX_RUNTIME_MS;
 	const runAssignment = async (assignment: Assignment, index: number): Promise<AssignmentResult> => {
 		if (options.signal?.aborted) return cancelledResult(assignment.id);
 
@@ -220,8 +247,12 @@ export async function executeAssignments(
 				id: options.runtimeIdPrefix ? `${options.runtimeIdPrefix}-${index}` : assignment.id,
 				index,
 				task: assignment.task,
+				description: assignment.id,
 				cwd: options.cwd,
 				modelOverride: assignment.modelOverride,
+				parentToolCallId: options.parentToolCallId,
+				maxRuntimeMs,
+				...lifecycle,
 				signal: options.signal,
 				onProgress: (progress) =>
 					options.onProgress?.({ id: assignment.id, index, state: "progress", progress }),

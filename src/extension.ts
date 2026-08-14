@@ -4,9 +4,12 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, rmSync } from "node:fs";
 import {
 	createLiveConcurrencyLimiter,
+	DEFAULT_CHILD_MAX_RUNTIME_MS,
 	executeAssignments,
 	expandAssignments,
 	type AssignmentRequest,
+	type AssignmentResult,
+	type ChildLifecyclePolicy,
 	type RunSubprocessFn,
 } from "./pstack-task.ts";
 
@@ -51,6 +54,7 @@ export type PstackExtensionOptions = {
 	packageRoot?: string;
 	homeDir?: string;
 	runSubprocess?: RunSubprocessFn;
+	deadlineMs?: number;
 	readFile?: ReadTextFileFn;
 	removeFile?: RemoveFileFn;
 	filesystem?: {
@@ -81,6 +85,7 @@ type CommandContext = {
 	sessionManager: {
 		getBranch?: () => unknown[];
 		getEntries?: () => unknown[];
+		getArtifactsDir?: () => string | null | undefined;
 	};
 	model?: ActiveModel;
 	modelRegistry?: unknown;
@@ -216,6 +221,29 @@ function activeModelSelector(ctx: CommandContext): string | undefined {
 	return `${model.provider}/${model.id}`;
 }
 
+function childLifecyclePolicy(ctx: CommandContext): ChildLifecyclePolicy {
+	const artifactsDir = ctx.sessionManager.getArtifactsDir?.();
+	if (typeof artifactsDir === "string" && artifactsDir.length > 0) {
+		return { kind: "persisted", artifactsDir };
+	}
+	return { kind: "ephemeral" };
+}
+
+function deadlineSignal(
+	parentSignal: AbortSignal | undefined,
+	deadlineMs: number,
+): { signal: AbortSignal; clear: () => void } {
+	const controller = new AbortController();
+	const timer = setTimeout(
+		() => controller.abort(new Error(`pstack_task exceeded its ${deadlineMs}ms deadline`)),
+		deadlineMs,
+	);
+	return {
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
+		clear: () => clearTimeout(timer),
+	};
+}
+
 function parseAssignmentRequest(params: Record<string, unknown>): AssignmentRequest {
 	if (params.strategy === "panel") {
 		if (typeof params.prompt !== "string") throw new Error("panel strategy requires a prompt");
@@ -303,6 +331,7 @@ function assertSupportedOmpVersion(version: unknown): void {
 export function createPstackExtension(options: PstackExtensionOptions = {}): (pi: ExtensionApi) => void {
 	const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT;
 	const homeDir = options.homeDir ?? homedir();
+	const deadlineMs = options.deadlineMs ?? DEFAULT_CHILD_MAX_RUNTIME_MS;
 	const readText: ReadTextFileFn =
 		options.readFile ?? options.filesystem?.readFile ?? ((path) => readFileSync(path, "utf8"));
 	const removeFile: RemoveFileFn =
@@ -482,21 +511,30 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 				}
 
 				asToolUpdate(onUpdate, `Launching ${assignments.length} P-Stack assignment(s)...`);
-				const results = await executeAssignments(assignments, {
-					runSubprocess,
-					cwd: ctx.cwd,
-					signal,
-					modelRegistry: ctx.modelRegistry ?? ctx.models?.registry,
-					settings: pi.pi?.settings,
-					agentPrompt,
-					runtimeIdPrefix: `pstack-${toolCallId}`,
-					schedule: scheduleAssignment,
-					onProgress(progress) {
-						if (progress.state === "completed") {
-							asToolUpdate(onUpdate, `Completed ${progress.id} (exit ${progress.result?.exitCode ?? "?"}).`);
-						}
-					},
-				});
+				const deadline = deadlineSignal(signal, deadlineMs);
+				let results: AssignmentResult[];
+				try {
+					results = await executeAssignments(assignments, {
+						runSubprocess,
+						cwd: ctx.cwd,
+						signal: deadline.signal,
+						modelRegistry: ctx.modelRegistry ?? ctx.models?.registry,
+						settings: pi.pi?.settings,
+						agentPrompt,
+						runtimeIdPrefix: `pstack-${toolCallId}`,
+						schedule: scheduleAssignment,
+						parentToolCallId: toolCallId,
+						maxRuntimeMs: DEFAULT_CHILD_MAX_RUNTIME_MS,
+						lifecycle: childLifecyclePolicy(ctx),
+						onProgress(progress) {
+							if (progress.state === "completed") {
+								asToolUpdate(onUpdate, `Completed ${progress.id} (exit ${progress.result?.exitCode ?? "?"}).`);
+							}
+						},
+					});
+				} finally {
+					deadline.clear();
+				}
 				const text = results
 					.map((result, index) => {
 						const logicalId = assignments[index]?.id ?? result.id;
