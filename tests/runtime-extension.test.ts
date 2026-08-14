@@ -70,7 +70,10 @@ function writePackageFixture(root: string): void {
 	);
 }
 
-function loadExtension(runtime: FakeRuntime, options: PstackExtensionOptions = {}): void {
+function loadExtension(
+	runtime: FakeRuntime,
+	options: PstackExtensionOptions & { deadlineMs?: number } = {},
+): void {
 	const factory = createPstackExtension(options);
 	factory(runtime.api as never);
 }
@@ -1640,6 +1643,156 @@ describe("pstack_task tool seam", () => {
 		} finally {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("pstack_task forwards persisted or ephemeral child lifecycle, a 600000ms default cap, and deadline abort", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-lifecycle-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-lifecycle-home-"));
+		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-lifecycle-art-"));
+		writePackageFixture(packageRoot);
+
+		type ChildLaunch = {
+			keepAlive: unknown;
+			artifactsDir: unknown;
+			hasArtifactsDir: boolean;
+			parentToolCallId: unknown;
+			maxRuntimeMs: unknown;
+			signal?: AbortSignal;
+		};
+
+		const recordLaunch = (options: Parameters<RunSubprocessFn>[0]): ChildLaunch => {
+			const rec = options as Parameters<RunSubprocessFn>[0] & {
+				keepAlive?: unknown;
+				artifactsDir?: unknown;
+				parentToolCallId?: unknown;
+				maxRuntimeMs?: unknown;
+			};
+			return {
+				keepAlive: rec.keepAlive,
+				artifactsDir: rec.artifactsDir,
+				hasArtifactsDir: Object.hasOwn(rec, "artifactsDir"),
+				parentToolCallId: rec.parentToolCallId,
+				maxRuntimeMs: rec.maxRuntimeMs,
+				signal: rec.signal,
+			};
+		};
+
+		try {
+			const persistedCalls: ChildLaunch[] = [];
+			const persistedRuntime = createFakeRuntime({
+				cwd: packageRoot,
+				artifactsDir,
+				sessionFile: join(artifactsDir, "parent.jsonl"),
+			});
+			const persistedRunner: RunSubprocessFn = async (options) => {
+				persistedCalls.push(recordLaunch(options));
+				return { exitCode: 0, id: options.id, output: "ok-persisted" };
+			};
+			loadExtension(persistedRuntime, { packageRoot, homeDir, runSubprocess: persistedRunner });
+			const persistedTool = persistedRuntime.tools.get("pstack_task")!;
+			const persistedResult = await persistedTool.execute(
+				"call-persisted",
+				{
+					strategy: "slice",
+					slices: [{ id: "persist-a", task: "revive me" }],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				persistedRuntime.createContext(),
+			);
+			expect(toolResultText(persistedResult)).toContain("ok-persisted");
+			expect(persistedCalls).toHaveLength(1);
+			expect(persistedCalls[0]?.keepAlive).toBe(true);
+			expect(persistedCalls[0]?.artifactsDir).toBe(artifactsDir);
+			expect(persistedCalls[0]?.parentToolCallId).toBe("call-persisted");
+			expect(persistedCalls[0]?.maxRuntimeMs).toBe(600000);
+
+			const ephemeralCalls: ChildLaunch[] = [];
+			const ephemeralRuntime = createFakeRuntime({ cwd: packageRoot });
+			const ephemeralRunner: RunSubprocessFn = async (options) => {
+				ephemeralCalls.push(recordLaunch(options));
+				return { exitCode: 0, id: options.id, output: "ok-ephemeral" };
+			};
+			loadExtension(ephemeralRuntime, { packageRoot, homeDir, runSubprocess: ephemeralRunner });
+			const ephemeralTool = ephemeralRuntime.tools.get("pstack_task")!;
+			const ephemeralResult = await ephemeralTool.execute(
+				"call-ephemeral",
+				{
+					strategy: "slice",
+					slices: [{ id: "ephem-a", task: "do not persist" }],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				ephemeralRuntime.createContext(),
+			);
+			expect(toolResultText(ephemeralResult)).toContain("ok-ephemeral");
+			expect(ephemeralCalls).toHaveLength(1);
+			expect(ephemeralCalls[0]?.keepAlive).toBe(false);
+			expect(ephemeralCalls[0]?.hasArtifactsDir).toBe(false);
+			expect(ephemeralCalls[0]?.artifactsDir).toBeUndefined();
+			expect(ephemeralCalls[0]?.parentToolCallId).toBe("call-ephemeral");
+			expect(ephemeralCalls[0]?.maxRuntimeMs).toBe(600000);
+
+			const deadlineMs = 40;
+			const safetyMs = 400;
+			const deadlineRuntime = createFakeRuntime({ cwd: packageRoot });
+			const hungRunner: RunSubprocessFn = async (options) => {
+				const signal = options.signal;
+				if (!signal) {
+					await Bun.sleep(10_000);
+					return { exitCode: 0, id: options.id, output: "hung-without-signal" };
+				}
+				if (!signal.aborted) {
+					await new Promise<void>((resolve) => {
+						signal.addEventListener("abort", () => resolve(), { once: true });
+					});
+				}
+				return { exitCode: 130, id: options.id, error: "Cancelled" };
+			};
+			loadExtension(deadlineRuntime, {
+				packageRoot,
+				homeDir,
+				runSubprocess: hungRunner,
+				deadlineMs,
+			});
+			const deadlineTool = deadlineRuntime.tools.get("pstack_task")!;
+			const started = Date.now();
+			const deadlineResult = await Promise.race([
+				deadlineTool.execute(
+					"call-deadline",
+					{
+						strategy: "slice",
+						slices: [{ id: "hung-a", task: "settle only after abort" }],
+						model: "m1",
+					},
+					undefined,
+					undefined,
+					deadlineRuntime.createContext(),
+				),
+				Bun.sleep(safetyMs).then(() => {
+					throw new Error(
+						`pstack_task hung past ${safetyMs}ms; missing deadlineMs abort on the child AbortSignal`,
+					);
+				}),
+			]);
+			expect(Date.now() - started).toBeLessThan(safetyMs);
+			const deadlineText = toolResultText(deadlineResult);
+			expect(deadlineText).toMatch(/hung-a: exit 130/);
+			expect(deadlineText).toMatch(/cancel/i);
+			const deadlineDetails = resultDetails(deadlineResult);
+			const deadlineResults = Array.isArray(deadlineDetails.results)
+				? (deadlineDetails.results as Array<{ exitCode?: number; error?: string }>)
+				: [];
+			expect(deadlineResults).toHaveLength(1);
+			expect(deadlineResults[0]?.exitCode).toBe(130);
+			expect(String(deadlineResults[0]?.error ?? "")).toMatch(/cancel/i);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+			rmSync(artifactsDir, { recursive: true, force: true });
 		}
 	});
 });

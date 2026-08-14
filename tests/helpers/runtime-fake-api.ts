@@ -64,6 +64,12 @@ export type FakeCommandContext = {
 	sessionManager: {
 		getBranch: () => CustomSessionEntry[];
 		getEntries: () => CustomSessionEntry[];
+		/** Parent session file when the fake parent is persisted. */
+		getSessionFile: () => string | undefined;
+		/** Parent session directory when the fake parent is persisted. */
+		getSessionDir: () => string | undefined;
+		/** Parent artifacts directory when the fake parent is persisted. */
+		getArtifactsDir: () => string | undefined;
 	};
 	hasPendingMessages: () => boolean;
 	/** Active session model, mirroring OMP ExtensionContext.model. */
@@ -135,6 +141,13 @@ export type FakeRuntimeOptions = {
 	version?: string | undefined;
 	symbolPreset?: SymbolPreset;
 	editorText?: string;
+	/**
+	 * Parent artifacts directory. Presence marks the fake parent as persisted
+	 * so pstack_task can forward { artifactsDir, keepAlive: true }.
+	 */
+	artifactsDir?: string;
+	/** Parent session file path. Presence also marks the fake parent as persisted. */
+	sessionFile?: string;
 };
 
 export type FakeRuntime = {
@@ -189,6 +202,8 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	let symbolPreset: SymbolPreset = options.symbolPreset ?? "unicode";
 	let editorText = options.editorText ?? "";
 	const cwd = options.cwd ?? process.cwd();
+	const artifactsDir = options.artifactsDir;
+	const sessionFile = options.sessionFile;
 
 	const createContext = (): FakeCommandContext => ({
 		ui: {
@@ -222,6 +237,9 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		sessionManager: {
 			getBranch: () => [...entries],
 			getEntries: () => [...entries],
+			getSessionFile: () => sessionFile,
+			getSessionDir: () => artifactsDir,
+			getArtifactsDir: () => artifactsDir,
 		},
 		hasPendingMessages: () => false,
 		model: parentModel,
