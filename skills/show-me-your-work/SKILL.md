@@ -65,7 +65,7 @@ Fix the log, not the story. If the work diverged from what a row claims, the row
 
 ## Cross-model review of the trail
 
-Before handing back, call native `task` once with a one-item batch named `AuditTrail`. Set `agent: "poteto-agent"` and give it a complete reason-bearing `task`. Do not add a `model` field. Self-review is not a substitute. The agent reads the audit trail and matched transcript, then flags what the user should notice. This is a scan for weak evidence and risk, not a redo.
+Before handing back, call `pstack_task` with `strategy: "slice"`, one `AuditTrail` slice, and a validated selector from a different model family when available. This is a cross-family safety judge, not ordinary same-model fan-out. Self-review is not a substitute. The OMP agent reads the audit trail and matched transcript, then flags what the user should notice. This is a scan for weak evidence and risk, not a redo.
 
 - Decisions logged with weak or absent evidence.
 - Verification steps skipped or claimed without proof in the transcript.

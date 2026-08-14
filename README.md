@@ -87,7 +87,7 @@ The bundled cursor-team-kit skills accept a concrete task after the slash comman
 
 Use native `task` first. For ordinary independent slices that use the same model resolution, call `task` once with a shared `context` and a batch of items. Give every item a stable `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task`. Do not put `model` on native task items.
 
-Native task owns job visibility, persisted child sessions, auto-delivery, `hub` inspection, parking, and revival. Reserve `pstack_task` for true model panels, explicit per-call or per-arm model selection, model races, and cross-family judges. `pstack_task` runs model-selected OMP subprocess agents in the current working directory. Routed skills use model choices from `<agent_dir>/rules/pstack-models.md` when they need one of those cases.
+Idle native `task` children park automatically. Use `hub` to inspect and wake or revive them. Native task also owns job visibility, persisted child sessions, and auto-delivery. Reserve `pstack_task` for true model panels, explicit per-call or per-arm model selection, model races, and cross-family judges. `pstack_task` runs model-selected OMP subprocess agents in the current working directory. Routed skills use model choices from `<agent_dir>/rules/pstack-models.md` when they need one of those cases.
 
 ## Disable or remove
 

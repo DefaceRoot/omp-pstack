@@ -46,13 +46,7 @@ perf-issue: auto
 hillclimb: auto
 judgment and prose: auto
 hardest tasks: auto
-how explorer: auto
-how explainer: auto
 how critics: auto, auto, auto, auto
-why investigators: auto
-why synthesizer: auto
-reflect tooling: auto
-reflect judgment, divergent, synthesizer: auto
 arena runners: auto, auto, auto, auto
 arena cross-judge pool: auto, auto, auto, auto
 swarm workers: auto
