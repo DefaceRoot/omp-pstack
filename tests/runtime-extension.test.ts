@@ -2103,4 +2103,78 @@ describe("pstack_task tool seam", () => {
 			rmSync(homeDir, { recursive: true, force: true });
 		}
 	});
+
+	test("pstack_task onUpdate roster lists both children with models, progress, and completed exits", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-roster-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-roster-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const reviewerId = "reviewer-a";
+		const implementerId = "implementer-b";
+		const reviewerModel = "openai/gpt-4.1-roster:exact";
+		const implementerModel = "anthropic/claude-sonnet-4-roster:exact";
+		const reviewerTask = "review the auth diff";
+		const implementerTask = "implement the auth fix";
+		const workDetail = "Scanning billing/ledger.ts for invoice rounding";
+		const requestCount = 17;
+		const tokenCount = 409;
+
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			if (options.task === reviewerTask) {
+				options.onProgress?.({
+					message: workDetail,
+					tokens: tokenCount,
+					requests: requestCount,
+				});
+				return { exitCode: 0, id: options.id, output: "review-complete" };
+			}
+			return { exitCode: 1, id: options.id, output: "implement-complete" };
+		};
+
+		const updates: string[] = [];
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			await tool.execute(
+				"call-roster",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: reviewerId, task: reviewerTask, model: reviewerModel },
+						{ id: implementerId, task: implementerTask, model: implementerModel },
+					],
+				},
+				undefined,
+				(payload: unknown) => {
+					updates.push(messageText(payload));
+				},
+				runtime.createContext(),
+			);
+
+			expect(updates.length).toBeGreaterThan(0);
+			const initial = updates[0]!;
+			expect(initial).toContain(reviewerId);
+			expect(initial).toContain(implementerId);
+			expect(initial).toContain(reviewerModel);
+			expect(initial).toContain(implementerModel);
+			expect(initial).toMatch(/queued|starting|started/i);
+
+			const progressUpdate = updates.slice(1).find((text) => text.includes(workDetail));
+			expect(progressUpdate).toBeDefined();
+			expect(progressUpdate).toContain(reviewerId);
+			expect(progressUpdate).toContain(implementerId);
+			expect(progressUpdate).toContain(String(requestCount));
+			expect(progressUpdate).toContain(String(tokenCount));
+
+			const final = updates.at(-1)!;
+			expect(final).toContain(reviewerId);
+			expect(final).toContain(implementerId);
+			expect(final).toMatch(/exit\s+0/);
+			expect(final).toMatch(/exit\s+1/);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
 });
