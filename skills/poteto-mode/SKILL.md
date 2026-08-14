@@ -86,9 +86,9 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 ## Subagents
 
-**Use OMP agents deliberately.** A direct custom-agent delegation uses the lowercase `task` tool with `agent: "poteto-agent"`. Model-aware parallel work uses `pstack_task`; the extension launches panel and slice assignments through the installed `poteto-agent` wrapper. Routed workflows (`how`, `why`, `interrogate`, `reflect`, `swarm`) prescribe their own panel or slice shape; do not replace it with ad-hoc calls.
+**Use OMP agents deliberately.** Native `task` is the default. For ordinary independent slices that use the same model resolution, call `task` once with a shared `context` and a batch of items. Give every item a stable `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task`. Do not put `model` on native task items.
 
-**Defaults for every `pstack_task` call.** Use `strategy: "panel"` only when every worker receives the same prompt and differs by model. Use `strategy: "slice"` for distinct assignments, with stable ids and complete tasks. Pass file pointers rather than inlining large context. Use the relevant named role selector from the active always-applied pstack model rule already present in the OMP system prompt. Use `auto` as the fallback when that role is absent. `/setup-pstack` validates every real selector against `omp models --json`.
+Native task owns job visibility, persisted child sessions, auto-delivery, `hub` inspection, parking, and revival. Reserve `pstack_task` for true model panels, explicit per-call or per-arm model selection, model races, and cross-family judges. For a panel, use `strategy: "panel"` when every worker receives the same prompt and differs by model. Pass file pointers instead of large inline context. Use the relevant named role selector from the active pstack model rule, or `auto` when the role is absent.
 
 You own every subagent's work. Review the diff and write your own summary, don't pass through what it said. Interrupt-chained resumes silently drop directives, so fire a fresh subagent with consolidated scope rather than trusting a "done" summary. A second opinion is the same prompt against a different model. Agreement is high-signal.
 

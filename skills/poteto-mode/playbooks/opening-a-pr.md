@@ -2,7 +2,7 @@
 
 Invoked at the end of every other playbook.
 
-**Worktree.** Work from a clean git worktree off main. OMP `pstack_task` subprocesses inherit the extension's current `cwd`; they do not create worktrees automatically. For parallel writers, create one exclusive worktree per slice before dispatch and put that exact path in the slice task. A dirty branch with unrelated work stays untouched; use a fresh worktree and apply only the owned patch.
+**Worktree.** Work from a clean git worktree off main. For parallel writers, assign one exclusive worktree to each native `task` item before dispatch. Put the exact path in the item's complete `task` brief. A dirty branch with unrelated work stays untouched. Use a fresh worktree and apply only the owned patch.
 
 **Commits.** Commit liberally; rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit; new commit when separable.
 

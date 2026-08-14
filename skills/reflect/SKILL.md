@@ -27,19 +27,19 @@ The additional XDG sessions root is eligible only on `linux` or `darwin`, and on
 
 ### 2. Spawn three reviewers in parallel
 
-Call `pstack_task` once with `strategy: "slice"` and three slices named `judgment`, `tooling`, and `divergent`. Give each slice its complete template-based task and optional configured selector in the slice's `model`; defaults are `auto`. The extension runs three OMP `poteto-agent` subprocesses concurrently. Prompts forbid writes while allowing configured MCP tools for citation checks; the parent applies edits.
+Call native `task` once with a shared `context` and three items with stable names: `judgment`, `tooling`, and `divergent`. Set `agent: "poteto-agent"` on every item. Give each item a complete reason-bearing `task` from its prompt template. Do not add a `model` field. Prompts forbid writes while allowing configured MCP tools for citation checks. The parent applies edits.
 
-| Lens | `model` | Prompt template |
-|---|---|---|
-| Judgment | your configured reflect-judgment model (default `auto`) | `skill://reflect/references/judgment-reviewer.md` |
-| Tooling | your configured reflect-tooling model (default `auto`) | `skill://reflect/references/tooling-reviewer.md` |
-| Divergent | your configured reflect-judgment model (default `auto`) | `skill://reflect/references/divergent-reviewer.md` |
+| Lens | Prompt template |
+|---|---|
+| Judgment | `skill://reflect/references/judgment-reviewer.md` |
+| Tooling | `skill://reflect/references/tooling-reviewer.md` |
+| Divergent | `skill://reflect/references/divergent-reviewer.md` |
 
-Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in the `pstack_task` response body.
+Pass each template verbatim, substituting the transcript path or digest where marked. Native task auto-delivers each reviewer's findings.
 
 ### 3. Synthesize
 
-Call `pstack_task` with `strategy: "slice"`, one slice `{ id: "synthesize", task: <complete synthesis brief> }`, and the configured reflect-judgment selector as `model` (default `auto`). Use `skill://reflect/references/synthesizer.md` verbatim with every reviewer's full output inserted where marked. The task forbids writes but allows configured MCP tools for citation spot-checks. The synthesizer returns a structured Accepted / Rejected / Backlog list.
+Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "poteto-agent"` and give it a complete reason-bearing `task` based on `skill://reflect/references/synthesizer.md`. Do not add a `model` field. Insert every reviewer's full output where marked. The task forbids writes but allows configured MCP tools for citation spot-checks. The synthesizer returns a structured Accepted, Rejected, and Backlog list.
 
 ### 4. Structural enforcement check
 

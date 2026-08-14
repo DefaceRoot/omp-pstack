@@ -27,7 +27,7 @@ Open a todolist with one entry per phase before launching anything.
 
 ## Phase B: Fan out
 
-Call `pstack_task` once. For coverage, use `strategy: "slice"` and pass one `{ id, task, model? }` entry per distinct slice; use the top-level `model` for the shared configured selector. For an identical-brief race, use `strategy: "panel"`, put the brief in `prompt`, and pass one selector per arm in `models`. For a mixed shape, encode each arm as a slice with its own complete task and optional model. The extension runs local OMP `poteto-agent` subprocesses concurrently.
+For coverage, call native `task` once with shared `context` and one item per distinct slice. Give every item a stable `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task`. Do not put `model` on native task items. For an identical-brief race, call `pstack_task` with `strategy: "panel"`, put the brief in `prompt`, and pass one selector per arm in `models`. For a mixed shape with explicit per-arm model selection, encode each arm as a complete `pstack_task` slice with its own model.
 
 A worker that needs a non-default pushed branch receives the branch name in its self-contained task and checks it out only in its assigned isolated worktree. Never pass Cursor-only environment fields.
 

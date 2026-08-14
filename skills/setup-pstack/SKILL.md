@@ -23,7 +23,7 @@ If `<agent_dir>/rules/pstack-models.md` exists, use its role lines as the curren
 
 Show every role and current value. Mark a real selector absent from `models[].selector` as invalid. Use the lowercase `ask` tool to offer the detected selectors plus `inherit-parent` and `auto`; never request free text for a value already in that list. `auto` and `inherit-parent` both tell `pstack_task` to omit its model override and inherit OMP's parent/default selection.
 
-Panel roles (`how critics`, `arena runners`, `architect runners`, `interrogate reviewers`) contain comma-separated lists. One panel member runs per entry, including alias entries, so list length sets fan-out. `arena cross-judge pool` is also a list; Arena selects one entry whose model family differs from the parent's when possible. `swarm workers` is one default selector shared by slice workers unless a race explicitly supplies per-slice models.
+Panel roles (`how critics`, `arena runners`, `architect runners`, `interrogate reviewers`) contain comma-separated lists. One panel member runs per entry, including alias entries, so list length sets fan-out. `arena cross-judge pool` is also a list. Arena selects one entry whose model family differs from the parent's when possible. `swarm workers` provides a fallback only when a model race or mixed shape explicitly needs a model-selected arm.
 
 ### 4. Validate
 

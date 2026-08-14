@@ -42,7 +42,7 @@ Decompose the question into 2-4 parallel exploration angles, each a distinct sli
 
 The right decomposition depends on the question. Use your judgment. Narrow questions: 2 explorers is fine. Broad subsystems: up to 4.
 
-Call `pstack_task` once with `strategy: "slice"`, one `{ id, task }` entry per exploration angle, and the configured how-explorer selector as top-level `model` (default `auto`). The extension runs those OMP `poteto-agent` slices concurrently. Each task includes the common base prompt and its distinct angle and explicitly forbids writes.
+Call native `task` once with a shared `context` and one item per exploration angle. Give each item a stable `name`, such as `DataModel`, `RequestPath`, or `Metrics`, plus `agent: "poteto-agent"` and a complete reason-bearing `task`. Do not add a `model` field. Each task includes the common base prompt, its distinct angle, and the reason that angle matters. It also forbids writes.
 
 Each explorer gets the same base prompt from `skill://how/references/explorer-prompt.md` plus a specific exploration angle naming its slice. Each explorer should:
 - Start broad: use `glob` for relevant directories and `grep` for key types, interfaces, and class names
@@ -57,13 +57,13 @@ Then proceed to Step 3.
 
 ### Step 2b. Direct Explain (simple questions)
 
-Call `pstack_task` with `strategy: "slice"`, one slice `{ id: "explain", task: <complete explainer brief> }`, and the configured how-explainer selector as `model` (default `auto`). The brief uses `skill://how/references/explainer-prompt.md`, explicitly forbids writes, and tells the OMP agent to explore with `glob`, `grep`, and `read` before writing the explanation. Same structure, just no explorer findings as input.
+Call native `task` once with a one-item batch named `Explain`. Set `agent: "poteto-agent"` and give it a complete reason-bearing `task`. Do not add a `model` field. The brief uses `skill://how/references/explainer-prompt.md`, forbids writes, and tells the agent to explore with `glob`, `grep`, and `read` before writing the explanation.
 
 Proceed to Step 4.
 
 ### Step 3. Synthesize (complex questions only)
 
-Once all explorers return, call `pstack_task` with `strategy: "slice"`, one slice `{ id: "synthesize", task: <complete synthesis brief> }`, and the configured how-explainer selector as `model` (default `auto`). Give it all explorer findings and `skill://how/references/explainer-prompt.md`; the brief forbids writes. The explainer reconciles overlap and contradictions into one human-facing explanation.
+Once all explorers return, call native `task` once with a one-item batch named `Synthesize`. Set `agent: "poteto-agent"` and give it a complete reason-bearing `task` with all explorer findings and `skill://how/references/explainer-prompt.md`. Do not add a `model` field. The brief forbids writes. The explainer reconciles overlap and contradictions into one human-facing explanation.
 
 ### Step 4. Present
 
