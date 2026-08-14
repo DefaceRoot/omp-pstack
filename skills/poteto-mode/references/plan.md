@@ -95,7 +95,7 @@ For bug fixes, the loop is reproduce on the surface, fix, verify on the same sur
 In the overview, name which poteto-mode non-negotiables the implementer must apply, by name:
 
 - `skill://how` over each unfamiliar subsystem before changing it.
-- `skill://interrogate` for adversarial review on contested designs before shipping.
+- `skill://interrogate` for adversarial review on contested designs before shipping. Its true model panel takes the `interrogate reviewers` selector from the active always-applied pstack model rule already present in the OMP system prompt, with `auto` fallback when the role is absent.
 - `/deslop` over each diff before commit. `skill://unslop` over any prose surface.
 - `skill://show-me-your-work` to keep a decision trail when the plan is large enough to need an auditable record.
 - the pstack **Babysit** playbook after opening the PR.

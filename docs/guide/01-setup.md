@@ -20,11 +20,11 @@ Run:
 /setup-pstack
 ```
 
-[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) resolves the active profile's `agent_dir`, reads the selectors from `omp models --json`, and writes your choices to `<agent_dir>/rules/pstack-models.md`. A new OMP session loads the rule.
+[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) resolves the active profile's `agent_dir`, reads the selectors from `omp models --json`, and writes your choices to `<agent_dir>/rules/pstack-models.md`. The active always-applied pstack model rule is loaded into a new session's system prompt.
 
 Use native `task` first. For ordinary independent slices that use the same model resolution, call `task` once with a shared `context` and a batch of items. Give every item a stable `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task`. Do not put `model` on native task items. Idle native children park automatically. Use `hub` to inspect and wake or revive them. Native task also owns job visibility, persisted child sessions, and auto-delivery.
 
-Reserve `pstack_task` for true model panels, explicit per-call or per-arm model selection, model races, and cross-family judges. A missing role uses `auto`. Both `inherit-parent` and `auto` tell `pstack_task` to omit its model override. For a panel role, list length sets the panel size. To restore defaults, rerun `/setup-pstack` or use `/pstack-cleanup` to remove `<agent_dir>/rules/pstack-models.md`.
+Reserve `pstack_task` for true model panels, explicit per-call or per-arm model selection, model races, and cross-family judges. Routed skills pass selected model overrides to `pstack_task`; a missing role uses `auto`. Both `inherit-parent` and `auto` tell `pstack_task` to omit its model override. For a panel role, list length sets the panel size. To restore defaults, rerun `/setup-pstack` or use `/pstack-cleanup` to remove `<agent_dir>/rules/pstack-models.md`.
 
 ## Accept the verification offer, or don't
 
