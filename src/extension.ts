@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -521,7 +522,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 						modelRegistry: ctx.modelRegistry ?? ctx.models?.registry,
 						settings: pi.pi?.settings,
 						agentPrompt,
-						runtimeIdPrefix: `pstack-${toolCallId}`,
+						runtimeIdPrefix: `pstack-${randomUUID()}`,
 						schedule: scheduleAssignment,
 						parentToolCallId: toolCallId,
 						maxRuntimeMs: DEFAULT_CHILD_MAX_RUNTIME_MS,

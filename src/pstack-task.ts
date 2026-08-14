@@ -92,7 +92,10 @@ export type AssignmentProgress = {
 	progress?: SubprocessProgress;
 	result?: AssignmentResult;
 };
-export type AssignmentScheduler = <T>(operation: () => Promise<T>) => Promise<T>;
+export type AssignmentScheduler = <T>(
+	operation: () => Promise<T>,
+	signal?: AbortSignal,
+) => Promise<T>;
 
 export type ExecuteAssignmentsOptions = {
 	runSubprocess: RunSubprocessFn;
@@ -120,39 +123,73 @@ function normalizedConcurrency(value: unknown): number {
 	return Math.max(1, Math.floor(value));
 }
 
+class AssignmentSchedulingCancelledError extends Error {
+	constructor() {
+		super("Cancelled before assignment launch");
+		this.name = "AbortError";
+	}
+}
+
+type QueuedAssignment = {
+	run: () => Promise<void>;
+	reject: (error: unknown) => void;
+	signal?: AbortSignal;
+	abortListener?: () => void;
+};
+
 export function createLiveConcurrencyLimiter(readMaxConcurrency: () => unknown): AssignmentScheduler {
 	let active = 0;
-	const queue: Array<{
-		operation: () => Promise<unknown>;
-		resolve: (value: unknown) => void;
-		reject: (error: unknown) => void;
-	}> = [];
+	const queue: QueuedAssignment[] = [];
+
+	const removeAbortListener = (entry: QueuedAssignment): void => {
+		if (!entry.signal || !entry.abortListener) return;
+		entry.signal.removeEventListener("abort", entry.abortListener);
+		entry.abortListener = undefined;
+	};
 
 	const drain = (): void => {
 		while (queue.length > 0 && active < normalizedConcurrency(readMaxConcurrency())) {
 			const entry = queue.shift();
 			if (!entry) return;
+			removeAbortListener(entry);
 			active += 1;
-			void (async () => {
-				try {
-					entry.resolve(await entry.operation());
-				} catch (error) {
-					entry.reject(error);
-				} finally {
-					active -= 1;
-					drain();
-				}
-			})();
+			void entry.run().finally(() => {
+				active -= 1;
+				drain();
+			});
 		}
 	};
 
-	return <T>(operation: () => Promise<T>): Promise<T> =>
+	return <T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
-			queue.push({
-				operation,
-				resolve: (value) => resolve(value as T),
+			if (signal?.aborted) {
+				reject(new AssignmentSchedulingCancelledError());
+				return;
+			}
+
+			const entry: QueuedAssignment = {
+				run: async () => {
+					try {
+						resolve(await operation());
+					} catch (error) {
+						reject(error);
+					}
+				},
 				reject,
-			});
+				signal,
+			};
+			if (signal) {
+				entry.abortListener = () => {
+					const index = queue.indexOf(entry);
+					if (index < 0) return;
+					queue.splice(index, 1);
+					removeAbortListener(entry);
+					entry.reject(new AssignmentSchedulingCancelledError());
+					drain();
+				};
+				signal.addEventListener("abort", entry.abortListener, { once: true });
+			}
+			queue.push(entry);
 			drain();
 		});
 }
@@ -277,9 +314,16 @@ export async function executeAssignments(
 	};
 
 	return Promise.all(
-		assignments.map((assignment, index) => {
+		assignments.map(async (assignment, index) => {
 			const operation = () => runAssignment(assignment, index);
-			return options.schedule ? options.schedule(operation) : operation();
+			try {
+				return options.schedule
+					? await options.schedule(operation, options.signal)
+					: await operation();
+			} catch (error) {
+				if (!(error instanceof AssignmentSchedulingCancelledError)) throw error;
+				return cancelledResult(assignment.id);
+			}
 		}),
 	);
 }
