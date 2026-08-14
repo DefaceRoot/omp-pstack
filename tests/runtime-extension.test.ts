@@ -2177,4 +2177,148 @@ describe("pstack_task tool seam", () => {
 			rmSync(homeDir, { recursive: true, force: true });
 		}
 	});
+
+	test("pstack_task roster correction reconciles cancelled queued child from returned exit-130", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-roster-cancel-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-roster-cancel-home-"));
+		writePackageFixture(packageRoot);
+
+		const settings = createFakeSettings({ "task.maxConcurrency": 1 });
+		const runtime = createFakeRuntime({ cwd: packageRoot, settings });
+
+		const runnerId = "runner-live";
+		const waiterId = "waiter-held";
+		const runnerTask = "occupy-and-finish";
+		const waiterTask = "never-launched-queued";
+
+		let releaseRunner!: () => void;
+		const runnerHeld = new Promise<void>((resolve) => {
+			releaseRunner = resolve;
+		});
+		let runnerEntered!: () => void;
+		const runnerStarted = new Promise<void>((resolve) => {
+			runnerEntered = resolve;
+		});
+		let waiterLaunched = false;
+
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			if (options.task === runnerTask) {
+				runnerEntered();
+				await runnerHeld;
+				return { exitCode: 0, id: options.id, output: "runner-done" };
+			}
+			waiterLaunched = true;
+			return { exitCode: 0, id: options.id, output: "waiter-should-not-run" };
+		};
+
+		const updates: string[] = [];
+		const abort = new AbortController();
+		let executeDone: Promise<unknown> = Promise.resolve();
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			executeDone = tool.execute(
+				"call-roster-cancel",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: runnerId, task: runnerTask, model: "openai/gpt-roster-runner:exact" },
+						{ id: waiterId, task: waiterTask, model: "anthropic/claude-roster-waiter:exact" },
+					],
+				},
+				abort.signal,
+				(payload: unknown) => {
+					updates.push(messageText(payload));
+				},
+				runtime.createContext(),
+			);
+
+			await runnerStarted;
+			expect(waiterLaunched).toBe(false);
+
+			abort.abort();
+			releaseRunner();
+			await executeDone;
+
+			expect(waiterLaunched).toBe(false);
+			expect(updates.length).toBeGreaterThan(0);
+			const final = updates.at(-1)!;
+			expect(final).toContain(runnerId);
+			expect(final).toContain(waiterId);
+			expect(final.toLowerCase()).not.toContain("queued");
+			expect(final).toMatch(/exit\s+0/);
+			expect(final).toMatch(/exit\s+130/);
+		} finally {
+			releaseRunner();
+			await Promise.allSettled([executeDone]);
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
+
+	test("pstack_task roster correction displays long model selectors byte-for-byte", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-roster-model-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-roster-model-home-"));
+		writePackageFixture(packageRoot);
+		const runtime = createFakeRuntime({ cwd: packageRoot });
+
+		const reviewerId = "reviewer-long";
+		const implementerId = "implementer-short";
+		const longModel = `anthropic/claude-sonnet-4-roster-bytewise:${"m".repeat(130)}`;
+		const shortModel = "openai/gpt-4.1-roster:exact";
+		const reviewerTask = "review with a long accepted selector";
+		const implementerTask = "implement beside the long selector";
+		const workDetail = "Reading auth/session.ts";
+		expect(longModel.length).toBeGreaterThan(160);
+
+		const launches: RunSubprocessOptions[] = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			launches.push(options);
+			if (options.task === reviewerTask) {
+				options.onProgress?.({
+					message: workDetail,
+					tokens: 88,
+					requests: 3,
+				});
+				return { exitCode: 0, id: options.id, output: "review-complete" };
+			}
+			return { exitCode: 0, id: options.id, output: "implement-complete" };
+		};
+
+		const updates: string[] = [];
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			await tool.execute(
+				"call-roster-long-model",
+				{
+					strategy: "slice",
+					slices: [
+						{ id: reviewerId, task: reviewerTask, model: longModel },
+						{ id: implementerId, task: implementerTask, model: shortModel },
+					],
+				},
+				undefined,
+				(payload: unknown) => {
+					updates.push(messageText(payload));
+				},
+				runtime.createContext(),
+			);
+
+			expect(updates.length).toBeGreaterThan(0);
+			for (const snapshot of updates) {
+				expect(snapshot).toContain(reviewerId);
+				expect(snapshot).toContain(implementerId);
+				expect(snapshot).toContain(longModel);
+				expect(snapshot).toContain(shortModel);
+			}
+
+			expect(launches).toHaveLength(2);
+			const longLaunch = launches.find((launch) => launch.task === reviewerTask);
+			expect(longLaunch?.modelOverride).toBe(longModel);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+		}
+	});
 });
