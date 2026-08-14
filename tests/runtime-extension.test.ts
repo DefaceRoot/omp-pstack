@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
 	BUNDLED_TEAM_KIT_COMMANDS,
 	OTHER_PSTACK_DIRECT_SKILL_COMMANDS,
@@ -1683,7 +1683,6 @@ describe("pstack_task tool seam", () => {
 			const persistedRuntime = createFakeRuntime({
 				cwd: packageRoot,
 				artifactsDir,
-				sessionFile: join(artifactsDir, "parent.jsonl"),
 			});
 			const persistedRunner: RunSubprocessFn = async (options) => {
 				persistedCalls.push(recordLaunch(options));
@@ -1793,6 +1792,185 @@ describe("pstack_task tool seam", () => {
 			rmSync(packageRoot, { recursive: true, force: true });
 			rmSync(homeDir, { recursive: true, force: true });
 			rmSync(artifactsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("persisted pstack_task with a traversal toolCallId forwards a filesystem-safe opaque child runtime id", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-safe-id-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-safe-id-home-"));
+		const artifactsDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-safe-id-art-"));
+		writePackageFixture(packageRoot);
+
+		const hostileToolCallId = "../sessions/../../tmp/pstack-evil";
+		const launches: Array<{
+			id: string;
+			parentToolCallId: unknown;
+			task: string;
+			description?: string;
+		}> = [];
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			launches.push({
+				id: options.id,
+				parentToolCallId: (options as { parentToolCallId?: unknown }).parentToolCallId,
+				task: options.task,
+				description: options.description,
+			});
+			return { exitCode: 0, id: options.id, output: "ok-safe-id" };
+		};
+
+		try {
+			const runtime = createFakeRuntime({ cwd: packageRoot, artifactsDir });
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+			const result = await tool.execute(
+				hostileToolCallId,
+				{
+					strategy: "slice",
+					slices: [{ id: "child-a", task: "persist under a safe runtime id" }],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+
+			expect(toolResultText(result)).toContain("ok-safe-id");
+			expect(launches).toHaveLength(1);
+			const launch = launches[0]!;
+			expect(launch.parentToolCallId).toBe(hostileToolCallId);
+			expect(launch.id.includes("/") || launch.id.includes("\\") || launch.id.includes("..")).toBe(false);
+			expect(launch.id.includes(hostileToolCallId)).toBe(false);
+			expect(launch.task.includes(hostileToolCallId)).toBe(false);
+			expect(String(launch.description ?? "").includes(hostileToolCallId)).toBe(false);
+			expect(isAbsolute(launch.id)).toBe(false);
+			expect(launch.id.includes("\0")).toBe(false);
+			expect(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(launch.id)).toBe(true);
+			const resolvedArtifacts = resolve(artifactsDir);
+			const resolvedChild = resolve(artifactsDir, launch.id);
+			const rel = relative(resolvedArtifacts, resolvedChild);
+			expect(rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel)).toBe(true);
+		} finally {
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
+			rmSync(artifactsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("queued pstack_task settles when its parent signal aborts without waiting for an occupied limiter slot", async () => {
+		const packageRoot = mkdtempSync(join(tmpdir(), "omp-pstack-tool-queued-cancel-"));
+		const homeDir = mkdtempSync(join(tmpdir(), "omp-pstack-tool-queued-cancel-home-"));
+		writePackageFixture(packageRoot);
+
+		const settings = createFakeSettings({ "task.maxConcurrency": 1 });
+		const runtime = createFakeRuntime({ cwd: packageRoot, settings });
+
+		let releaseOccupant!: () => void;
+		const occupantHeld = new Promise<void>((resolve) => {
+			releaseOccupant = resolve;
+		});
+		let occupantEntered!: () => void;
+		const occupantStarted = new Promise<void>((resolve) => {
+			occupantEntered = resolve;
+		});
+		let waiterLaunched = false;
+
+		const runSubprocess: RunSubprocessFn = async (options) => {
+			if (options.task === "occupy-slot") {
+				occupantEntered();
+				await occupantHeld;
+				return { exitCode: 0, id: options.id, output: "occupied" };
+			}
+			waiterLaunched = true;
+			return { exitCode: 0, id: options.id, output: "waiter-ran" };
+		};
+
+		const nextTurns = (count: number): Promise<void> =>
+			new Promise((resolve) => {
+				const tick = (left: number) => {
+					if (left <= 0) {
+						resolve();
+						return;
+					}
+					setImmediate(() => tick(left - 1));
+				};
+				tick(count);
+			});
+
+		let occupantDone: Promise<unknown> = Promise.resolve();
+		let waiterDone: Promise<unknown> = Promise.resolve();
+		try {
+			loadExtension(runtime, { packageRoot, homeDir, runSubprocess });
+			const tool = runtime.tools.get("pstack_task")!;
+
+			occupantDone = tool.execute(
+				"call-occupy",
+				{
+					strategy: "slice",
+					slices: [{ id: "occ", task: "occupy-slot" }],
+					model: "m1",
+				},
+				undefined,
+				undefined,
+				runtime.createContext(),
+			);
+			await occupantStarted;
+
+			const waiterAbort = new AbortController();
+			const launchUpdates: string[] = [];
+			waiterDone = tool.execute(
+				"call-queued",
+				{
+					strategy: "slice",
+					slices: [{ id: "wait", task: "queued-work" }],
+					model: "m1",
+				},
+				waiterAbort.signal,
+				(payload: unknown) => {
+					launchUpdates.push(messageText(payload));
+				},
+				runtime.createContext(),
+			);
+
+			let sawLaunching = launchUpdates.some((text) => text.includes("Launching"));
+			for (let i = 0; i < 16 && !sawLaunching; i += 1) {
+				await nextTurns(1);
+				sawLaunching = launchUpdates.some((text) => text.includes("Launching"));
+			}
+			expect(sawLaunching).toBe(true);
+			expect(waiterLaunched).toBe(false);
+
+			waiterAbort.abort();
+
+			const outcome = await Promise.race([
+				waiterDone.then(
+					(result) => ({ status: "settled" as const, result }),
+					(error) => ({ status: "settled" as const, error }),
+				),
+				nextTurns(8).then(() => ({ status: "still-waiting" as const })),
+			]);
+
+			expect(outcome.status).toBe("settled");
+			expect(waiterLaunched).toBe(false);
+			if (outcome.status === "settled") {
+				if ("error" in outcome && outcome.error !== undefined) {
+					expect(String(outcome.error)).toMatch(/cancel/i);
+				} else if ("result" in outcome) {
+					const text = toolResultText(outcome.result);
+					const details = resultDetails(outcome.result);
+					const results = Array.isArray(details.results)
+						? (details.results as Array<{ exitCode?: number; error?: string }>)
+						: [];
+					expect(
+						/cancel/i.test(text) ||
+							results.some((item) => item.exitCode === 130 || /cancel/i.test(String(item.error ?? ""))),
+					).toBe(true);
+				}
+			}
+		} finally {
+			releaseOccupant();
+			await Promise.allSettled([occupantDone, waiterDone]);
+			rmSync(packageRoot, { recursive: true, force: true });
+			rmSync(homeDir, { recursive: true, force: true });
 		}
 	});
 });
