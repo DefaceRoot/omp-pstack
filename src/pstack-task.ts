@@ -332,3 +332,58 @@ export async function executeAssignments(
 		}),
 	);
 }
+
+/** One Responses-API conversation item; only the discriminating fields matter here. */
+type ResponsesItem = { type?: unknown; role?: unknown; [key: string]: unknown };
+
+/**
+ * Reorder a Responses-API request body so no assistant `message` sits between a
+ * `function_call` and its `function_call_output`.
+ *
+ * A reasoning child (e.g. deepseek through opencode-go's Console Go relay)
+ * narrates between parallel tool calls, and OMP serializes that narration as
+ * `message` items interleaved with the calls. The relay then rejects the next
+ * request with `No tool output found for tool call <id>`, because it pairs
+ * calls to outputs positionally and the interposed text breaks the run. Per
+ * tool turn we hoist interposed reasoning and assistant-message items ahead of
+ * the calls, leaving the calls contiguous and immediately followed by their
+ * outputs. Turn boundaries are preserved, so a well-formed request round-trips
+ * unchanged.
+ *
+ * Returns the rewritten body, or `undefined` when nothing moved.
+ */
+export function normalizeResponsesToolTurns(payload: unknown): unknown {
+	if (!payload || typeof payload !== "object") return undefined;
+	const body = payload as { input?: unknown };
+	if (!Array.isArray(body.input)) return undefined;
+	const items = body.input as ResponsesItem[];
+
+	const result: ResponsesItem[] = [];
+	let index = 0;
+	while (index < items.length) {
+		if (items[index].type !== "function_call") {
+			result.push(items[index]);
+			index += 1;
+			continue;
+		}
+		const hoisted: ResponsesItem[] = [];
+		const calls: ResponsesItem[] = [];
+		while (index < items.length) {
+			const item = items[index];
+			if (item.type === "function_call") calls.push(item);
+			else if (item.type === "reasoning" || (item.type === "message" && item.role === "assistant"))
+				hoisted.push(item);
+			else break;
+			index += 1;
+		}
+		const outputs: ResponsesItem[] = [];
+		while (index < items.length && items[index].type === "function_call_output") {
+			outputs.push(items[index]);
+			index += 1;
+		}
+		result.push(...hoisted, ...calls, ...outputs);
+	}
+
+	if (result.every((item, i) => item === items[i])) return undefined;
+	return { ...body, input: result };
+}

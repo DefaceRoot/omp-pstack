@@ -6,6 +6,7 @@ import {
 	createLiveConcurrencyLimiter,
 	executeAssignments,
 	expandAssignments,
+	normalizeResponsesToolTurns,
 	type AssignmentProgress,
 	type AssignmentRequest,
 	type AssignmentResult,
@@ -546,6 +547,16 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 				};
 			},
 		);
+
+		// A reasoning child narrating between parallel tool calls makes OMP emit
+		// assistant `message` items among the `function_call`s. Strict Responses
+		// relays (opencode-go's Console Go for deepseek) then reject the next
+		// request with `No tool output found for tool call <id>`. Re-grouping each
+		// tool turn before the request leaves the child on its native model.
+		pi.on("before_provider_request", (event: unknown) => {
+			if (!event || typeof event !== "object" || !("payload" in event)) return undefined;
+			return normalizeResponsesToolTurns(event.payload);
+		});
 
 		const z = pi.zod;
 		const stringSchema = z.string();
