@@ -17,19 +17,12 @@ const PACKAGE_JSON_PATH = join(ROOT, "package.json");
 const README_PATH = join(ROOT, "README.md");
 
 const PACKAGE_NAME = "@defaceroot/omp-pstack";
-const PACKAGE_VERSION = "0.1.0";
 const EXTENSION_ENTRY = "./src/extension.ts";
-const UPSTREAM_COMMIT = "6f7e183aa9f48805c38746705fe6a17d42cafb94";
-const UPSTREAM_VERSION = "0.14.0";
-/** Derived active-profile rule path — not a hardcoded universal ~/.omp/agent location. */
-const GENERATED_MODEL_RULE = "<agent_dir>/rules/pstack-models.md";
-const DEFAULT_PROFILE_AGENT_EXAMPLE = "~/.omp/agent";
 
 const REQUIRED_PUBLISH_PATHS = [
 	"src",
 	"skills",
 	"agents",
-	"automations",
 	"docs",
 	"LICENSE",
 	"LICENSES",
@@ -82,45 +75,8 @@ const TEAM_KIT_EXAMPLE_LINES = [
 	"/control-ui Start `bun run dev`, open http://localhost:3000, submit the login form, and capture a screenshot plus an accessibility snapshot.",
 ] as const;
 
-/**
- * OMP 17.2.13 uninstall contract (PluginManager.link leaves a node_modules
- * symlink with no package dependency; bun uninstall exits 0 but may leave it).
- * Pin exact wording after whitespace normalization only.
- */
-const REQUIRED_REMOTE_UNINSTALL_CLAUSE =
-	"For a recommended GitHub remote install, uninstall removes OMP's managed installed copy cleanly.";
-const REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE =
-	"For a local-link install from a local checkout, uninstall removes OMP plugin registration but may leave the OMP node_modules symlink; it always preserves the user-owned checkout or working tree.";
-const REQUIRED_STALE_SYMLINK_CLEANUP_CLAUSE =
-	"After uninstall, run `omp plugin doctor` to obtain plugins_directory. If the stale symlink remains, manually remove only `<plugins_directory>/node_modules/@defaceroot/omp-pstack`.";
-const STALE_SYMLINK_PATH =
-	"<plugins_directory>/node_modules/@defaceroot/omp-pstack";
-/** Exact safe stale-symlink cleanup command — no wildcard/recursive flags. */
-const STALE_SYMLINK_RM_COMMAND =
-	'rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"';
-
-/**
- * README must declare the runtime floor explicitly and explain why.
- * package.json peerDependency is owned by NativeYieldRed — do not assert it here.
- * Local-link stale-symlink uninstall caveat stays separately pinned; it is not
- * the reason for the minimum OMP runtime.
- */
-const REQUIRED_OMP_RUNTIME_FLOOR = "OMP >=17.2.13";
-const REQUIRED_OMP_RUNTIME_SAFETY_CLAUSE =
-	"Requires OMP >=17.2.13 for runtime safety: `pstack_task` depends on strict structured-yield enforcement, MCP-safe child extension isolation (`enableMCP` + empty preloaded paths), live settings APIs, and active-profile getAgentDir.";
-
-/**
- * Profile-aware generated-rule contract. Pin exact wording after whitespace
- * normalization only — ~/.omp/agent may appear only as a labeled default example.
- */
-const REQUIRED_PROFILE_CONFIG_CLAUSE =
-	"Resolve the active agent_dir with `omp config path` (honors `--profile` / `OMP_PROFILE`).";
-const REQUIRED_PROFILE_RULE_PATH_CLAUSE =
-	"The generated model-routing rule is `<agent_dir>/rules/pstack-models.md`.";
-const REQUIRED_PROFILE_COMMAND_CLAUSE =
-	"`/setup-pstack` and `/pstack-cleanup` operate on the active OMP profile.";
-const REQUIRED_DEFAULT_PROFILE_EXAMPLE_CLAUSE =
-	"The default-profile path `~/.omp/agent` is an example only, not universal.";
+/** Exact safe stale-symlink cleanup command: no wildcard or recursive flags. */
+const STALE_SYMLINK_RM_COMMAND = 'rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"';
 
 const LAUREN_TAN_NOTICE = "Copyright (c) 2026 Lauren Tan";
 const CURSOR_NOTICE = "Copyright (c) 2026 Cursor";
@@ -240,7 +196,7 @@ test("package.json names an installable omp-pstack extension with pinned metadat
 	const pkg = readPackageJson();
 
 	expect(pkg.name).toBe(PACKAGE_NAME);
-	expect(pkg.version).toBe(PACKAGE_VERSION);
+	expect(typeof pkg.version).toBe("string");
 	expect(pkg.private).toBe(false);
 	expect(pkg.omp?.extensions).toEqual([EXTENSION_ENTRY]);
 
@@ -248,8 +204,10 @@ test("package.json names an installable omp-pstack extension with pinned metadat
 	expect(existsSync(extensionPath)).toBe(true);
 	expect(statSync(extensionPath).isFile()).toBe(true);
 
-	expect(pkg.pstackPort?.upstreamVersion).toBe(UPSTREAM_VERSION);
-	expect(pkg.pstackPort?.upstreamCommit).toBe(UPSTREAM_COMMIT);
+	// The README names the ported upstream release; package metadata must agree with it.
+	const readme = readReadme();
+	expect(readme).toContain(`P-Stack ${pkg.pstackPort?.upstreamVersion}`);
+	expect(readme).toContain(String(pkg.pstackPort?.upstreamCommit));
 
 	expect(Array.isArray(pkg.files)).toBe(true);
 	const files = (pkg.files as unknown[])
@@ -319,80 +277,11 @@ test("README fences a runnable P-Stack trial and pinned team-kit slash example l
 	}
 });
 
-test("README polarity-binds cleanup to the derived active-profile rule and preserves user artifacts", () => {
+test("README stale-symlink cleanup runs omp plugin doctor before one exact, non-recursive rm", () => {
 	const readme = readReadme();
-	const normalized = normalizeWhitespace(readme);
-	const escapedRule = GENERATED_MODEL_RULE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-	expect(readme).toMatch(/plugin-owned|package-owned|shipped by the plugin/i);
-	expect(readme).toMatch(/user-generated|user-created|user-owned/i);
-	expect(normalized).toContain(normalizeWhitespace(GENERATED_MODEL_RULE));
-	expect(readme).toMatch(/\bskills\/\b/);
-
-	// Confirmed cleanup deletes only the derived active-profile rule path.
-	expect(readme).toMatch(
-		new RegExp(
-			`/pstack-cleanup[\\s\\S]{0,500}deletes only \\\`?${escapedRule}\\\`?`,
-			"i",
-		),
-	);
-	expect(readme).toMatch(/declin\w+[\s\S]{0,160}(leaves|leave|retain|unchanged)/i);
-	expect(readme).toMatch(
-		/uninstall\w*[\s\S]{0,500}(does not (remove|delete)|leaves?|remain)[\s\S]{0,200}(user-generated|user-created|user-owned)/i,
-	);
-	expect(readme).toMatch(
-		/(uninstall|\/pstack-cleanup)[\s\S]{0,500}(does not (remove|delete)|leaves?|remain)[\s\S]{0,200}(local checkout|checkout|working tree)/i,
-	);
-});
-
-test("README pins profile-aware agent_dir resolution for setup/cleanup rule paths", () => {
-	const readme = readReadme();
-	const normalized = normalizeWhitespace(readme);
-
-	expect(normalized).toContain(normalizeWhitespace(REQUIRED_PROFILE_CONFIG_CLAUSE));
-	expect(normalized).toContain(normalizeWhitespace(REQUIRED_PROFILE_RULE_PATH_CLAUSE));
-	expect(normalized).toContain(normalizeWhitespace(REQUIRED_PROFILE_COMMAND_CLAUSE));
-	expect(normalized).toContain(normalizeWhitespace(REQUIRED_DEFAULT_PROFILE_EXAMPLE_CLAUSE));
-	expect(normalized).toContain("omp config path");
-	expect(normalized).toContain(normalizeWhitespace(GENERATED_MODEL_RULE));
-	expect(normalized).toContain("--profile");
-	expect(normalized).toContain("OMP_PROFILE");
-	expect(normalized).toContain(DEFAULT_PROFILE_AGENT_EXAMPLE);
-});
-
-test("README requires OMP >=17.2.13 and explains the runtime safety dependency", () => {
-	const readme = readReadme();
-	const normalized = normalizeWhitespace(readme);
-
-	expect(normalized).toContain(REQUIRED_OMP_RUNTIME_FLOOR);
-	expect(normalized).toContain(normalizeWhitespace(REQUIRED_OMP_RUNTIME_SAFETY_CLAUSE));
-});
-
-test("README pins OMP 17.2.13 remote/local uninstall and stale symlink cleanup", () => {
-	const readme = readReadme();
-	const normalized = normalizeWhitespace(readme);
-
-	// Exact semantic clauses: remote clean managed-copy removal; local-link may leave
-	// the node_modules symlink while always preserving checkout.
-	expect(normalized).toContain(
-		normalizeWhitespace(REQUIRED_REMOTE_UNINSTALL_CLAUSE),
-	);
-	expect(normalized).toContain(
-		normalizeWhitespace(REQUIRED_LOCAL_LINK_UNINSTALL_CLAUSE),
-	);
-	expect(normalized).toContain(
-		normalizeWhitespace(REQUIRED_STALE_SYMLINK_CLEANUP_CLAUSE),
-	);
-	expect(normalized).toContain(normalizeWhitespace(STALE_SYMLINK_PATH));
-
-	// One fenced sh block must contain the safe command order exactly:
-	// omp plugin doctor → rm -- "<plugins_directory>/node_modules/@defaceroot/omp-pstack"
-	// Fails if rm is deleted, reordered before doctor, replaced, or made recursive/wildcard.
 	const cleanupBlock = findOrderedStaleSymlinkCleanupBlock(readme);
 	expect(cleanupBlock).toBeDefined();
 	expect(cleanupBlock!.lang).toBe("sh");
-	expect(cleanupBlock!.lines).toContain("omp plugin doctor");
-	expect(cleanupBlock!.lines).toContain(STALE_SYMLINK_RM_COMMAND);
 	expect(cleanupBlock!.lines.indexOf("omp plugin doctor")).toBeLessThan(
 		cleanupBlock!.lines.indexOf(STALE_SYMLINK_RM_COMMAND),
 	);

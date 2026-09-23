@@ -1,6 +1,6 @@
-# Set up pstack
+# Set up P-Stack
 
-In this page you install the plugin, pick which models pstack uses, and run your first task. Setup is one command plus a short conversation.
+Install the plugin, inspect the model roles, then run a real task. Model choices live in OMP's native pickers, not in a project rule.
 
 ## Install the plugin
 
@@ -10,40 +10,40 @@ Install the extension from a terminal:
 omp install github:DefaceRoot/omp-pstack
 ```
 
-OMP installs and enables `@defaceroot/omp-pstack`. Confirm it with `omp plugin list --json`, then start a fresh OMP session so the extension's skills, agents, tools, and slash aliases are discovered.
+OMP installs and enables `@defaceroot/omp-pstack`. Confirm it with `omp plugin list --json`, then start a fresh OMP session so its skills, agents, tools, and slash aliases are discovered.
 
 ## Pick your models
 
-Run:
+Open `/model` → Roles. Assign models to any of the three P-Stack roles:
 
-```text
-/setup-pstack
-```
+| Role | Agent | Work |
+|---|---|---|
+| P-Stack Code (`@pstack-code`) | `poteto-agent` | Code delegates, exploration, and ordinary helpers. |
+| P-Stack Judgment (`@pstack-judgment`) | `poteto-judgment` | Hard changes, prose, synthesis, and judgment. |
+| P-Stack Precise (`@pstack-precise`) | `poteto-precise` | Precisely specified execution and reflect tooling review. |
 
-[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) resolves the active profile's `agent_dir`, reads the selectors from `omp models --json`, and writes your choices to `<agent_dir>/rules/pstack-models.md`. The active always-applied pstack model rule is loaded into a new session's system prompt.
+An unassigned role inherits your session model. In `/agents`, you can override the model on any of those three agents. A panel uses the three role assignments, and a cross-family judge chooses an assigned role from a family different from the session model when one is available.
 
-Use native `task` first. For ordinary independent slices that use the same model resolution, call `task` once with a shared `context` and a batch of items. Give every item a stable `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task`. Do not put `model` on native task items. Idle native children park automatically. Use `hub` to inspect and wake or revive them. Native task also owns job visibility, persisted child sessions, and auto-delivery.
+Run `/setup-pstack` to see the three role assignments and any `/agents` overrides. It explains where to change them. It also offers to delete a legacy `<agent_dir>/rules/pstack-models.md` left by older omp-pstack versions. Accept or decline that cleanup as appropriate. Changing a role or agent override takes effect on the next spawn. You do not need to restart OMP.
 
-Reserve `pstack_task` for true model panels, explicit per-call or per-arm model selection, model races, and cross-family judges. Routed skills pass selected model overrides to `pstack_task`; a missing role uses `auto`. Both `inherit-parent` and `auto` tell `pstack_task` to omit its model override. For a panel role, list length sets the panel size. To restore defaults, rerun `/setup-pstack` or use `/pstack-cleanup` to remove `<agent_dir>/rules/pstack-models.md`.
+Native `task` handles ordinary independent slices. Call it once with shared `context` and named items, each with an `agent` and a complete reason-bearing `task`. No `model` field belongs on native task items. Idle children park automatically. Use `hub` to inspect and revive them. Reserve `pstack_task` for panels, explicit per-arm selection, races, and cross-family judges.
+
+`/pstack-status` reports mode ON/OFF and the role → model summary. `/pstack-cleanup` asks for confirmation before clearing the three `modelRoles.pstack-*` assignments, clearing model overrides for the three Poteto agents in `/agents`, and deleting the legacy rule file if present.
 
 ## Accept the verification offer, or don't
 
-At the end of setup, `/setup-pstack` looks for a way to prove app behavior in your project, either a `verify-*` skill or an existing harness. If it finds neither, it offers once to generate one with [`/create-verification-skill`](../../skills/create-verification-skill/SKILL.md).
-
-Say yes and it writes `.omp/skills/verify-<app>/`, a project-local skill that teaches agents to drive your app the way a user does. It proves the skill works once before handing it over. Say no and setup moves on. You can run `/create-verification-skill` yourself any time. [Verify and ship](./06-verify-and-ship.md#create-a-project-verification-skill) covers when it earns its place.
-
-After `/setup-pstack` writes or updates `<agent_dir>/rules/pstack-models.md`, you must start a new OMP session before relying on the changed P-Stack model routing. `/reload-plugins` does not refresh active rules in OMP 17.2.13 and is insufficient; the already-running session does not read the changed rule.
+If your project has no `.omp/skills/verify-*` skill, `/setup-pstack` offers to run [`/create-verification-skill`](../../skills/create-verification-skill/SKILL.md). Accept and it writes `.omp/skills/verify-<app>/`, a project-local skill that teaches agents to drive the app and prove its behavior. The generator proves the skill works once before handing it over. Decline and setup moves on. You can run `/create-verification-skill` yourself later. [Verify and ship](./06-verify-and-ship.md#create-a-project-verification-skill) explains when it's useful.
 
 ## Run your first task
 
-Pick something real but small, and describe it the way you'd describe it to a colleague:
+Pick something real but small and describe it the way you'd describe it to a colleague:
 
 ```text
 /poteto-mode add a --json flag to this command. text output stays byte-identical. verify both.
 ```
 
-Watch the todo list. The first item is always "read the Principles section". The rest are the matched playbook's steps copied in, the Feature playbook for this prompt. If `/poteto-mode` skips a step, the step stays in the list with `skip: <reason>`, so you can see what it chose not to do.
+Watch the todo list. Its first items are the matched playbook's steps, the Feature playbook for this prompt. If `/poteto-mode` skips one, it stays in the list with `skip: <reason>` so you can see why.
 
-From here you can type normal follow-ups. `/poteto-mode` is sticky. It stays on for the conversation until you opt out by saying so.
+`/poteto-mode` stays on for the conversation until you opt out or run `/pstack-off`.
 
 Next: [Route work through `/poteto-mode`](./02-poteto-mode.md).

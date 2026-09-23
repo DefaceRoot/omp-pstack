@@ -40,7 +40,7 @@ flowchart LR
     H --> I[Verify]
 ```
 
-The panel comes from your [`/setup-pstack`](../../skills/setup-pstack/SKILL.md) configuration, and you can adjust it per task. Ask for more candidates when the decision matters, fewer when it doesn't:
+The default panel comes from the three P-Stack roles: `@pstack-judgment`, `@pstack-precise`, and `@pstack-code`. Set their models in `/model` → Roles and adjust the number of attempts per task. Ask for more candidates when the decision matters, fewer when it doesn't:
 
 ```text
 /arena this, 5 candidates. the cache key format is expensive to change later.

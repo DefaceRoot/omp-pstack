@@ -81,6 +81,10 @@ export type FakeCommandContext = {
 
 export type FakeSettingsLike = {
 	get: (key: string) => unknown;
+	set?: (key: string, value: unknown) => void;
+	override?: (key: string, value: unknown) => void;
+	getModelRole?: (role: string) => string | undefined;
+	setModelRole?: (role: string, value: string | undefined) => void;
 };
 
 export type FakeExtensionAPI = {
@@ -137,6 +141,8 @@ export type FakeRuntimeOptions = {
 	symbolPreset?: SymbolPreset;
 	editorText?: string;
 	artifactsDir?: string;
+	/** Models that `ctx.models.resolve("@<role>")` returns, keyed by role id. */
+	roleModels?: Record<string, FakeModel>;
 };
 
 export type FakeRuntime = {
@@ -192,6 +198,7 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	let editorText = options.editorText ?? "";
 	const cwd = options.cwd ?? process.cwd();
 	const artifactsDir = options.artifactsDir;
+	const roleModels = options.roleModels ?? {};
 
 	const createContext = (): FakeCommandContext => ({
 		ui: {
@@ -233,6 +240,7 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 			list: () => (parentModel ? [parentModel] : []),
 			current: () => parentModel,
 			resolve: (spec) => {
+				if (spec.startsWith("@")) return roleModels[spec.slice(1)];
 				if (!parentModel) return undefined;
 				const selector = `${parentModel.provider}/${parentModel.id}`;
 				return spec === selector || spec === parentModel.id ? parentModel : undefined;

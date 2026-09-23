@@ -59,8 +59,8 @@ function readOperationalCorpus(): string {
 }
 
 test("shipped omp-pstack retains full pstack inventory with OMP-native contracts", () => {
-	expect(inventory.counts.skillDirectories).toBe(44);
-	expect(inventory.counts.principles).toBe(21);
+	expect(inventory.counts.skillDirectories).toBe(45);
+	expect(inventory.counts.principles).toBe(23);
 	expect(inventory.counts.playbooks).toBe(23);
 	expect(inventory.playbooks).toContain("opening-a-pr");
 	expect(inventory.skillDirectories).toEqual(
@@ -95,9 +95,6 @@ test("shipped omp-pstack retains full pstack inventory with OMP-native contracts
 	expect(existsSync(join(repoRoot, inventory.showMeYourWorkLogHelper))).toBe(
 		true,
 	);
-	for (const path of inventory.benny) {
-		expect(existsSync(join(repoRoot, path))).toBe(true);
-	}
 	for (const path of inventory.guide) {
 		expect(existsSync(join(repoRoot, path))).toBe(true);
 	}

@@ -1,7 +1,15 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+	PSTACK_ROLES,
+	resolveSelection,
+	roleAlias,
+	roleForAgent,
+	type PstackRoleId,
+	type RoleLookup,
+} from "./model-roles.ts";
 import {
 	createLiveConcurrencyLimiter,
 	executeAssignments,
@@ -30,7 +38,6 @@ const DIRECT_SKILLS = [
 	"poteto-mode",
 	"recall",
 	"reflect",
-	"setup-pstack",
 	"show-me-your-work",
 	"swarm",
 	"tdd",
@@ -45,7 +52,7 @@ const TEAM_KIT_SKILLS = ["deslop", "control-cli", "control-ui"] as const;
 const MODE_ENTRY_TYPE = "pstack-mode";
 const POTETO_COMMAND = "/poteto-mode";
 const POTETO_STATUS_KEY = "poteto-mode";
-const MODEL_RULE_BASENAME = "pstack-models.md";
+const LEGACY_MODEL_RULE_BASENAME = "pstack-models.md";
 const DEFAULT_REMINDER =
 	"New task? Playbook match or rigor needed -> apply /poteto-mode. Casual turn or user opts out -> don't.";
 
@@ -67,6 +74,21 @@ export type PstackExtensionOptions = {
 type ActiveModel = {
 	provider: string;
 	id: string;
+};
+
+/** Shapes guaranteed by OMP's settings schema. Keys may be absent on older runtimes. */
+type SettingsValues = {
+	"task.agentModelOverrides": Record<string, string | string[]>;
+	"task.maxConcurrency": unknown;
+	modelTags: Record<string, unknown>;
+};
+
+type SettingsApi = {
+	get?: <K extends keyof SettingsValues>(key: K) => SettingsValues[K] | undefined;
+	set?: <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => void;
+	override?: (key: string, value: unknown) => void;
+	getModelRole?: (role: string) => string | undefined;
+	setModelRole?: (role: string, value: string | undefined) => void;
 };
 
 type SymbolPreset = "unicode" | "nerd" | "ascii";
@@ -93,6 +115,8 @@ type CommandContext = {
 	models?: {
 		registry?: unknown;
 		current?: () => ActiveModel | undefined;
+		resolve?: (spec: string) => ActiveModel | undefined;
+		family?: (model: ActiveModel) => string;
 	};
 };
 
@@ -116,7 +140,8 @@ type ExtensionApi = {
 		event: string,
 		handler:
 			| ((event: unknown, ctx: CommandContext) => unknown)
-			| ((event: { systemPrompt?: string | string[] }, ctx: CommandContext) => unknown),
+			| ((event: { systemPrompt?: string | string[] }, ctx: CommandContext) => unknown)
+			| ((event: SubagentSpawnEvent, ctx: CommandContext) => unknown),
 	) => void;
 	appendEntry: (customType: string, data?: unknown) => void;
 	sendUserMessage?: (content: unknown, options?: unknown) => void;
@@ -128,12 +153,15 @@ type ExtensionApi = {
 	};
 	pi?: {
 		runSubprocess?: RunSubprocessFn;
-		settings?: {
-			get?: (key: string) => unknown;
-		};
+		settings?: SettingsApi;
 		getAgentDir?: () => string;
 		VERSION?: string;
 	};
+};
+
+type SubagentSpawnEvent = {
+	agent?: string;
+	patterns?: string[];
 };
 
 type SkillDocument = {
@@ -321,6 +349,56 @@ function activeModelSelector(ctx: CommandContext): string | undefined {
 	return `${model.provider}/${model.id}`;
 }
 
+/** Settings say whether a role is assigned; `ctx.models` resolves it the way core does. */
+function roleLookup(ctx: CommandContext, settings: SettingsApi | undefined): RoleLookup {
+	const models = ctx.models;
+	const session = ctx.model ?? models?.current?.();
+	return {
+		sessionModel: activeModelSelector(ctx),
+		sessionFamily: session && models?.family ? models.family(session) : undefined,
+		roleModel(role: PstackRoleId) {
+			if (settings?.getModelRole && settings.getModelRole(role) === undefined) return undefined;
+			const model = models?.resolve?.(`@${role}`);
+			if (!model) return undefined;
+			return { selector: `${model.provider}/${model.id}`, family: models?.family?.(model) ?? model.provider };
+		},
+	};
+}
+
+function roleSummaryLines(settings: SettingsApi | undefined): string[] {
+	const overrides = settings?.get?.("task.agentModelOverrides");
+	return PSTACK_ROLES.map((role) => {
+		const assigned = settings?.getModelRole?.(role.id);
+		let line = `${role.name} (${roleAlias(role)}): ${assigned ?? "not assigned, uses the session model"}`;
+		const override = overrides?.[role.agent];
+		const overrideText = Array.isArray(override) ? override.join(", ") : override;
+		if (typeof overrideText === "string" && overrideText.trim() !== "") {
+			line += `. /agents override for ${role.agent}: ${overrideText}`;
+		}
+		return line;
+	});
+}
+
+/** Show the P-Stack roles in `/model` → Roles before the user assigns them. */
+function registerRoleTags(settings: SettingsApi | undefined): void {
+	if (!settings?.get || !settings.override) return;
+	const tags = settings.get("modelTags") ?? {};
+	const missing = PSTACK_ROLES.filter((role) => !Object.hasOwn(tags, role.id));
+	if (missing.length === 0) return;
+	settings.override("modelTags", {
+		...tags,
+		...Object.fromEntries(missing.map((role) => [role.id, { name: role.name, color: role.color }])),
+	});
+}
+
+function hasVerificationSkill(cwd: string): boolean {
+	try {
+		return readdirSync(join(cwd, ".omp", "skills")).some((name) => name.startsWith("verify-"));
+	} catch {
+		return false;
+	}
+}
+
 function childLifecyclePolicy(ctx: CommandContext): ChildLifecyclePolicy {
 	const artifactsDir = ctx.sessionManager.getArtifactsDir?.();
 	if (typeof artifactsDir === "string" && artifactsDir.length > 0) {
@@ -485,34 +563,87 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			},
 		});
 
+		const legacyRulePath = (): string => {
+			const agentDir =
+				typeof pi.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : join(homeDir, ".omp", "agent");
+			return join(agentDir, "rules", LEGACY_MODEL_RULE_BASENAME);
+		};
+
+		const deleteLegacyRule = async (ctx: CommandContext, rulePath: string): Promise<void> => {
+			try {
+				await removeFile(rulePath);
+				ctx.ui.notify?.(`Deleted ${rulePath}.`, "info");
+			} catch (error) {
+				let code: unknown;
+				if (error && typeof error === "object" && "code" in error) code = error.code;
+				if (code !== "ENOENT") ctx.ui.notify?.(`Unable to delete ${rulePath}: ${errorMessage(error)}`, "error");
+			}
+		};
+
 		pi.registerCommand("pstack-status", {
-			description: "Show sticky P-Stack mode status",
+			description: "Show sticky P-Stack mode status and model roles",
 			handler(_args, ctx) {
-				ctx.ui.notify?.(`P-Stack mode is ${modeActive ? "ON" : "OFF"}.`, "info");
+				const lines = [`P-Stack mode is ${modeActive ? "ON" : "OFF"}.`, ...roleSummaryLines(pi.pi?.settings)];
+				ctx.ui.notify?.(lines.join("\n"), "info");
+			},
+		});
+
+		pi.registerCommand("setup-pstack", {
+			description: "Show P-Stack model roles and where to change them",
+			async handler(_args, ctx) {
+				const rulePath = legacyRulePath();
+				if (
+					existsSync(rulePath) &&
+					(await ctx.ui.confirm(
+						"Delete legacy P-Stack model rule?",
+						`${rulePath} is no longer read. P-Stack models now come from /model roles. Delete it?`,
+					))
+				) {
+					await deleteLegacyRule(ctx, rulePath);
+				}
+				ctx.ui.notify?.(
+					[
+						"P-Stack model roles:",
+						...roleSummaryLines(pi.pi?.settings),
+						"Assign a role and its thinking level in /model -> Roles. Override one agent in /agents. The next spawn uses the change.",
+					].join("\n"),
+					"info",
+				);
+				if (
+					!hasVerificationSkill(ctx.cwd) &&
+					(await ctx.ui.confirm(
+						"Create a project verification skill?",
+						"No .omp/skills/verify-* skill found. Draft /create-verification-skill so agents can prove changes on the real app?",
+					))
+				) {
+					ctx.ui.setEditorText("/create-verification-skill ");
+				}
 			},
 		});
 
 		pi.registerCommand("pstack-cleanup", {
-			description: "Remove the P-Stack model routing rule",
+			description: "Reset P-Stack model roles, agent overrides, and the legacy rule",
 			async handler(_args, ctx) {
-				const agentDir =
-					typeof pi.pi?.getAgentDir === "function"
-						? pi.pi.getAgentDir()
-						: join(homeDir, ".omp", "agent");
-				const rulePath = join(agentDir, "rules", MODEL_RULE_BASENAME);
+				const settings = pi.pi?.settings;
+				const rulePath = legacyRulePath();
+				const aliases = PSTACK_ROLES.map(roleAlias).join(", ");
+				const agents = PSTACK_ROLES.map((role) => role.agent).join(", ");
 				const confirmed = await ctx.ui.confirm(
-					"Remove P-Stack model rule?",
-					`Delete only ${rulePath} (${MODEL_RULE_BASENAME})?`,
+					"Reset P-Stack model routing?",
+					`Clear ${aliases} from modelRoles, clear /agents model overrides for ${agents}, and delete ${rulePath} if present?`,
 				);
 				if (!confirmed) return;
-				try {
-					await removeFile(rulePath);
-					ctx.ui.notify?.(`Deleted ${rulePath}.`, "info");
-				} catch (error) {
-					let code: unknown;
-					if (error && typeof error === "object" && "code" in error) code = error.code;
-					if (code !== "ENOENT") ctx.ui.notify?.(`Unable to delete ${rulePath}: ${errorMessage(error)}`, "error");
+				for (const role of PSTACK_ROLES) {
+					if (settings?.getModelRole?.(role.id) !== undefined) settings.setModelRole?.(role.id, undefined);
 				}
+				const overrides = settings?.get?.("task.agentModelOverrides");
+				if (overrides && PSTACK_ROLES.some((role) => Object.hasOwn(overrides, role.agent))) {
+					const remaining = { ...overrides };
+					for (const role of PSTACK_ROLES) delete remaining[role.agent];
+					settings?.set?.("task.agentModelOverrides", remaining);
+				}
+				await deleteLegacyRule(ctx, rulePath);
+				ctx.ui.notify?.("P-Stack model routing reset. Unassigned roles use the session model.", "info");
 			},
 		});
 
@@ -524,6 +655,13 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		for (const event of ["session_start", "session_switch", "session_branch", "session_tree"]) {
 			pi.on(event, reconstructMode);
 		}
+		pi.on("session_start", () => {
+			try {
+				registerRoleTags(pi.pi?.settings);
+			} catch (error) {
+				console.warn(`omp-pstack: unable to register /model role names: ${errorMessage(error)}`);
+			}
+		});
 
 		pi.on(
 			"before_agent_start",
@@ -558,6 +696,17 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			return normalizeResponsesToolTurns(event.payload);
 		});
 
+		// Shipped agents name their role (`model: "@pstack-code"`). An unassigned
+		// custom role is not an alias OMP recognizes, so core would treat it as a
+		// literal selector; route that spawn to the session model instead.
+		pi.on("before_subagent_spawn", (event: SubagentSpawnEvent, ctx: CommandContext) => {
+			const role = event.agent === undefined ? undefined : roleForAgent(event.agent);
+			if (!role || event.patterns?.length !== 1 || event.patterns[0] !== roleAlias(role)) return undefined;
+			const sessionModel = activeModelSelector(ctx);
+			if (!sessionModel) return undefined;
+			return { model: sessionModel, note: `${role.name} role not assigned; using the session model` };
+		});
+
 		const z = pi.zod;
 		const stringSchema = z.string();
 		const sliceSchema = z.object({
@@ -576,7 +725,8 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		pi.registerTool({
 			name: "pstack_task",
 			label: "P-Stack Task",
-			description: "Run a model panel or independent P-Stack task slices concurrently.",
+			description:
+				"Run a model panel or independent P-Stack slices concurrently. Model values: @pstack-judgment, @pstack-precise, @pstack-code (roles assigned in /model), cross-family (first assigned role whose family differs from the session model), inherit-parent, or an exact provider/model selector.",
 			parameters,
 			async execute(
 				toolCallId: string,
@@ -593,7 +743,8 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 				}
 
 				const request = parseAssignmentRequest(params);
-				const assignments = expandAssignments(request, activeModelSelector(ctx));
+				const lookup = roleLookup(ctx, pi.pi?.settings);
+				const assignments = expandAssignments(request, (model) => resolveSelection(model, lookup));
 				const runSubprocess = options.runSubprocess ?? pi.pi?.runSubprocess;
 				if (!runSubprocess) throw new Error("pstack_task requires pi.pi.runSubprocess or an injected runSubprocess");
 
@@ -606,7 +757,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 
 				const roster: RosterRow[] = assignments.map((assignment) => ({
 					id: assignment.id,
-					model: rosterText(assignment.modelOverride) ?? "inherit-parent",
+					model: rosterText(assignment.modelLabel) ?? "inherit-parent",
 					state: { kind: "queued" },
 				}));
 				let publishedRoster: string | undefined;

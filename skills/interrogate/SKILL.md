@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Interrogate
 
-Spawn one reviewer per configured model to adversarially review code changes. Each model gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas. Models differ in blind spots, priors, and reasoning patterns. Agreement across models is high-confidence signal; lone-model findings are worth reading but lower confidence.
+Spawn one reviewer per configured model to adversarially review code changes. Each model gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas.
 
 The deliverable is a synthesized verdict. Do NOT auto-apply changes.
 
@@ -22,29 +22,28 @@ Package the diff (or file contents) plus any surrounding context files the revie
 
 ## Step 2, State the Intent
 
-Before spawning reviewers, state the intent explicitly. What is this code trying to accomplish? Derive this from:
+Before spawning reviewers, state the intent explicitly. Derive this from:
 
 - The user's message
 - Commit messages
 - PR description if one exists
 - The code itself
 
-Write one clear paragraph. Reviewers challenge whether the work achieves the intent well, not whether the intent itself is correct. If you're unsure about the intent, ask the user before proceeding.
+Write one clear paragraph. If you're unsure about the intent, ask the user before proceeding.
 
 ## Step 3, Spawn Reviewers
 
-Launch all reviewers in a single message using the `pstack_task` tool. Use the `interrogate reviewers` list from the active always-applied pstack model rule already present in the OMP system prompt when that role is present, one reviewer per entry, extending or shrinking the Reviewer A/B/C/D labels below to the configured entry count; otherwise use the table's four `auto` defaults.
+Launch all reviewers in one `pstack_task` panel. Use the default roles below. If the user asks for N reviewers, repeat role aliases or use explicit selectors so `models` has N entries.
 
-| Subagent | Default model |
-|----------|---------------|
-| Reviewer A | `auto` |
-| Reviewer B | `auto` |
-| Reviewer C | `auto` |
-| Reviewer D | `auto` |
+| Reviewer | Model role |
+|----------|------------|
+| Reviewer A | `@pstack-judgment` |
+| Reviewer B | `@pstack-precise` |
+| Reviewer C | `@pstack-code` |
 
-Call `pstack_task` once with `strategy: "panel"`, the fully filled review template as `prompt`, and the configured `interrogate reviewers` entries as `models`. With no configured line, use four `auto` entries. The extension runs one parallel OMP `poteto-agent` per panel entry; the prompt makes the review read-only by contract.
+Call `pstack_task` once with `strategy: "panel"`, the fully filled review template as `prompt`, and `models: ["@pstack-judgment", "@pstack-precise", "@pstack-code"]` by default. The extension runs one parallel OMP agent per panel entry. The prompt makes the review read-only by contract.
 
-If a model slug is rejected as unresolvable when you try to spawn the subagent, check the valid slugs in the `pstack_task` tool's error message, pick the closest equivalent (prefer the highest-reasoning tier of the same family), spawn with the valid slug, and open a separate PR to update the configured value or default table. Do not block the review on the slug issue. If the configured value is `inherit-parent` or `auto`, omit `model` instead; never treat those aliases as broken slugs or enter this fallback for them.
+If `pstack_task` rejects a selector, report the error and ask the user to fix the role in `/model`.
 
 Read `skill://interrogate/references/reviewer-prompt.md` and fill in the template with:
 1. The stated intent
@@ -53,8 +52,6 @@ Read `skill://interrogate/references/reviewer-prompt.md` and fill in the templat
 4. The code-quality lens from `skill://interrogate/references/code-quality-review.md`
 
 The same filled template goes to all reviewers, so every model applies the code-quality lens.
-
-Each reviewer produces structured findings as described in the prompt template.
 
 ## Step 4, Synthesize
 
@@ -70,7 +67,7 @@ As results come back, build a unified picture:
 
 You are the lead reviewer, a pragmatic senior engineer, not a neutral aggregator.
 
-Read `skill://interrogate/references/lead-judgment.md` for the full framework. Reviewers only see a slice of the codebase. You have the full context (the goal, the constraints, the timeline, which tradeoffs were already considered). Use that context aggressively.
+Read `skill://interrogate/references/lead-judgment.md` for the full framework.
 
 Categorize every finding using these buckets:
 
@@ -104,7 +101,7 @@ Present the verdict in this structure:
 [Valid but low-priority. Brief list.]
 
 ### Dismissed
-[Rejected findings with brief rationale. This shows the user what was filtered out and why, so they can override your judgment if they disagree.]
+[Rejected findings with brief rationale.]
 
 ### Agreement Map
 [Where did models agree, where did they diverge, and what does the pattern of agreement/disagreement tell us?]

@@ -1,6 +1,6 @@
 {
   "name": "@defaceroot/omp-pstack",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Native Oh My Pi port of P-Stack",
   "license": "MIT",
   "private": false,
@@ -9,7 +9,6 @@
     "src",
     "skills",
     "agents",
-    "automations",
     "docs",
     "LICENSE",
     "LICENSES",
@@ -21,8 +20,8 @@
     ]
   },
   "pstackPort": {
-    "upstreamVersion": "0.14.0",
-    "upstreamCommit": "6f7e183aa9f48805c38746705fe6a17d42cafb94"
+    "upstreamVersion": "0.15.3",
+    "upstreamCommit": "b42effe0aa50f59c693d7e2924714e015e00bf7c"
   },
   "repository": {
     "type": "git",

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -7,7 +7,7 @@ import {
 	OTHER_PSTACK_DIRECT_SKILL_COMMANDS,
 	PSTACK_DIRECT_SKILL_COMMANDS,
 	PSTACK_MODE_ENTRY_TYPE,
-	PSTACK_MODEL_RULE_BASENAME,
+	LEGACY_MODEL_RULE_BASENAME,
 	PSTACK_SESSION_COMMANDS,
 } from "./helpers/runtime-expected-commands.ts";
 import {
@@ -28,10 +28,12 @@ import pstackExtension, {
 import {
 	executeAssignments,
 	expandAssignments,
-	resolveModelOverride,
 	type RunSubprocessFn,
 	type RunSubprocessOptions,
 } from "../src/pstack-task.ts";
+import { resolveSelection, type RoleLookup } from "../src/model-roles.ts";
+
+const passThrough = (model: string | undefined) => ({ modelOverride: model, label: model ?? "inherit-parent" });
 
 // Fixture skill body must be longer than the sticky reminder so the
 // "short reminder" assertion can distinguish full prompt vs reminder.
@@ -170,11 +172,11 @@ describe("omp-pstack runtime extension", () => {
 		}
 	});
 
-	test("registers poteto-mode, the other 22 P-Stack direct skills, bundled team-kit skills, and session commands unprefixed", () => {
+	test("registers poteto-mode, the other 21 P-Stack direct skills, bundled team-kit skills, and session commands unprefixed", () => {
 		loadExtension(runtime, { packageRoot, homeDir });
 
-		expect(PSTACK_DIRECT_SKILL_COMMANDS).toHaveLength(23);
-		expect(OTHER_PSTACK_DIRECT_SKILL_COMMANDS).toHaveLength(22);
+		expect(PSTACK_DIRECT_SKILL_COMMANDS).toHaveLength(22);
+		expect(OTHER_PSTACK_DIRECT_SKILL_COMMANDS).toHaveLength(21);
 		expect(runtime.commands.has("poteto-mode")).toBe(true);
 		for (const name of OTHER_PSTACK_DIRECT_SKILL_COMMANDS) {
 			expect(runtime.commands.has(name)).toBe(true);
@@ -302,58 +304,113 @@ describe("omp-pstack runtime extension", () => {
 		expect(reminder.length).toBeLessThan(POTETO_SKILL_BODY.length);
 	});
 
-	test("pstack-cleanup asks before deleting only the exact OMP model rule under active getAgentDir()", async () => {
-		// Derive the active profile agent dir under this test's mkdtemp homeDir —
-		// never a fixed global /tmp/profiles/... path, and never rmSync a path
-		// outside the existing afterEach homeDir cleanup.
+	test("pstack-cleanup asks first, then clears only P-Stack roles, P-Stack agent overrides, and the legacy rule under active getAgentDir()", async () => {
 		const agentDir = join(homeDir, "profiles", "work", "agent");
 		const rulesDir = join(agentDir, "rules");
 		mkdirSync(rulesDir, { recursive: true });
-		const modelRulePath = join(rulesDir, PSTACK_MODEL_RULE_BASENAME);
+		const legacyRulePath = join(rulesDir, LEGACY_MODEL_RULE_BASENAME);
 		const otherRulePath = join(rulesDir, "unrelated.md");
-		const homeFallbackPath = join(homeDir, ".omp", "agent", "rules", PSTACK_MODEL_RULE_BASENAME);
-		mkdirSync(join(homeDir, ".omp", "agent", "rules"), { recursive: true });
-		writeFileSync(modelRulePath, "feature, refactoring: auto\n", "utf8");
+		writeFileSync(legacyRulePath, "feature, refactoring: auto\n", "utf8");
 		writeFileSync(otherRulePath, "keep me\n", "utf8");
-		writeFileSync(homeFallbackPath, "do not touch home fallback\n", "utf8");
-
+		const settings = createFakeSettings(
+			{ "task.agentModelOverrides": { "poteto-judgment": "openai/gpt-x", scout: "zai/glm-flash" } },
+			{ "pstack-code": "zai/glm-flash:low", "pstack-judgment": "anthropic/opus", slow: "openai/gpt-x" },
+		);
+		runtime.setSettings(settings);
 		runtime.setGetAgentDir(() => agentDir);
 		runtime.setConfirmResult(false);
 		loadExtension(runtime, { packageRoot, homeDir });
-		await runtime.invokeCommand("pstack-cleanup");
 
-		expect(runtime.confirmCalls.length).toBe(1);
-		expect(runtime.confirmCalls[0]!.message).toContain(modelRulePath);
-		expect(runtime.confirmCalls[0]!.message).toContain(PSTACK_MODEL_RULE_BASENAME);
-		expect(runtime.confirmCalls[0]!.message).not.toContain(homeFallbackPath);
-		expect(readFileSync(modelRulePath, "utf8")).toContain("feature, refactoring");
-		expect(readFileSync(otherRulePath, "utf8")).toBe("keep me\n");
-		expect(readFileSync(homeFallbackPath, "utf8")).toBe("do not touch home fallback\n");
+		await runtime.invokeCommand("pstack-cleanup");
+		expect(runtime.confirmCalls[0]!.message).toContain(legacyRulePath);
+		expect(settings.modelRoles["pstack-code"]).toBe("zai/glm-flash:low");
+		expect(existsSync(legacyRulePath)).toBe(true);
 
 		runtime.setConfirmResult(true);
 		await runtime.invokeCommand("pstack-cleanup");
-
-		expect(runtime.confirmCalls.length).toBe(2);
-		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
+		expect(settings.modelRoles).toEqual({ slow: "openai/gpt-x" });
+		expect(settings.values["task.agentModelOverrides"]).toEqual({ scout: "zai/glm-flash" });
+		expect(existsSync(legacyRulePath)).toBe(false);
 		expect(readFileSync(otherRulePath, "utf8")).toBe("keep me\n");
-		expect(readFileSync(homeFallbackPath, "utf8")).toBe("do not touch home fallback\n");
 	});
 
-	test("pstack-cleanup falls back to homeDir/.omp/agent when getAgentDir is unavailable", async () => {
+	test("pstack-cleanup falls back to homeDir/.omp/agent for the legacy rule when getAgentDir is unavailable", async () => {
 		const rulesDir = join(homeDir, ".omp", "agent", "rules");
 		mkdirSync(rulesDir, { recursive: true });
-		const modelRulePath = join(rulesDir, PSTACK_MODEL_RULE_BASENAME);
-		writeFileSync(modelRulePath, "feature, refactoring: auto\n", "utf8");
+		const legacyRulePath = join(rulesDir, LEGACY_MODEL_RULE_BASENAME);
+		writeFileSync(legacyRulePath, "feature, refactoring: auto\n", "utf8");
 
-		// Explicitly omit getAgentDir so the extension must use the homeDir fallback.
 		runtime.setGetAgentDir(undefined);
-		runtime.setConfirmResult(true);
 		loadExtension(runtime, { packageRoot, homeDir });
 		await runtime.invokeCommand("pstack-cleanup");
 
-		expect(runtime.confirmCalls.length).toBe(1);
-		expect(runtime.confirmCalls[0]!.message).toContain(modelRulePath);
-		expect(() => readFileSync(modelRulePath, "utf8")).toThrow();
+		expect(runtime.confirmCalls[0]!.message).toContain(legacyRulePath);
+		expect(existsSync(legacyRulePath)).toBe(false);
+	});
+
+	test("setup-pstack deletes a confirmed legacy rule, reports role assignments, and drafts a verification skill", async () => {
+		const agentDir = join(homeDir, "agent");
+		mkdirSync(join(agentDir, "rules"), { recursive: true });
+		const legacyRulePath = join(agentDir, "rules", LEGACY_MODEL_RULE_BASENAME);
+		writeFileSync(legacyRulePath, "bug-fix: auto\n", "utf8");
+		runtime.setGetAgentDir(() => agentDir);
+		runtime.setSettings(
+			createFakeSettings(
+				{ "task.agentModelOverrides": { "poteto-precise": "openai/gpt-y" } },
+				{ "pstack-judgment": "anthropic/opus:high" },
+			),
+		);
+		loadExtension(runtime, { packageRoot, homeDir });
+
+		await runtime.invokeCommand("setup-pstack");
+
+		expect(existsSync(legacyRulePath)).toBe(false);
+		const summary = runtime.notifications.map((note) => note.message).join("\n");
+		expect(summary).toContain("@pstack-judgment): anthropic/opus:high");
+		expect(summary).toContain("@pstack-code): not assigned");
+		expect(summary).toContain("/agents override for poteto-precise: openai/gpt-y");
+		expect(runtime.getEditorText()).toBe("/create-verification-skill ");
+	});
+
+	test("setup-pstack skips the legacy and verification prompts when neither applies", async () => {
+		mkdirSync(join(packageRoot, ".omp", "skills", "verify-app"), { recursive: true });
+		runtime.setGetAgentDir(() => join(homeDir, "agent"));
+		loadExtension(runtime, { packageRoot, homeDir });
+
+		await runtime.invokeCommand("setup-pstack");
+
+		expect(runtime.confirmCalls).toEqual([]);
+		expect(runtime.getEditorText()).toBe("");
+	});
+
+	test("session_start names the P-Stack roles for /model without replacing user-defined tags", async () => {
+		const userTag = { name: "My Code Model" };
+		const settings = createFakeSettings({ modelTags: { "pstack-code": userTag, review: { name: "Review" } } });
+		runtime.setSettings(settings);
+		loadExtension(runtime, { packageRoot, homeDir });
+
+		await runtime.emitSessionStart();
+
+		const tags = settings.values.modelTags as Record<string, { name?: string }>;
+		expect(tags["pstack-code"]).toBe(userTag);
+		expect(tags.review?.name).toBe("Review");
+		expect(tags["pstack-judgment"]?.name).toBe("P-Stack Judgment");
+		expect(tags["pstack-precise"]?.name).toBe("P-Stack Precise");
+	});
+
+	test("an unassigned role behind a shipped agent spawns on the session model; assigned roles and other agents are untouched", async () => {
+		runtime.setParentModel({ provider: "zai", id: "glm-flash" });
+		loadExtension(runtime, { packageRoot, homeDir });
+		const handler = runtime.handlers.get("before_subagent_spawn")?.[0];
+		expect(handler).toBeDefined();
+		const ctx = runtime.createContext();
+
+		expect(await handler!({ agent: "poteto-judgment", patterns: ["@pstack-judgment"] }, ctx)).toEqual({
+			model: "zai/glm-flash",
+			note: "P-Stack Judgment role not assigned; using the session model",
+		});
+		expect(await handler!({ agent: "poteto-judgment", patterns: ["anthropic/opus:high"] }, ctx)).toBeUndefined();
+		expect(await handler!({ agent: "scout", patterns: ["@pstack-judgment"] }, ctx)).toBeUndefined();
 	});
 
 	test("registers ctrl+alt+o and only rewrites the visible editor draft", async () => {
@@ -451,35 +508,74 @@ describe("omp-pstack runtime extension", () => {
 
 });
 
-describe("pstack_task pure helpers", () => {
-	test("expands panel versus slice strategies and refuses auto/inherit-parent as literal model slugs", () => {
-		const panel = expandAssignments({
-			strategy: "panel",
-			prompt: "critique the diff",
-			models: ["claude-a", "auto", "inherit-parent", "grok-b"],
-		});
-		expect(panel.map((item) => item.id)).toEqual(["panel-0", "panel-1", "panel-2", "panel-3"]);
-		expect(panel[0]?.modelOverride).toBe("claude-a");
-		expect(panel[3]?.modelOverride).toBe("grok-b");
-		// Sentinels must never reach the runner as the strings "auto" / "inherit-parent".
-		expect(panel[1]?.modelOverride).not.toBe("auto");
-		expect(panel[2]?.modelOverride).not.toBe("inherit-parent");
-		expect(resolveModelOverride("auto")).not.toBe("auto");
-		expect(resolveModelOverride("inherit-parent")).not.toBe("inherit-parent");
-		expect(resolveModelOverride("gpt-test")).toBe("gpt-test");
-
-		const slices = expandAssignments({
-			strategy: "slice",
-			slices: [
-				{ id: "auth", task: "cover auth" },
-				{ id: "billing", task: "cover billing" },
-			],
-			model: "inherit-parent",
-		});
-		expect(slices.map((item) => item.id)).toEqual(["auth", "billing"]);
-		expect(slices.every((item) => item.modelOverride !== "inherit-parent")).toBe(true);
+describe("pstack_task model selection", () => {
+	const lookup = (roles: Record<string, { selector: string; family: string }>): RoleLookup => ({
+		sessionModel: "zai/glm-flash",
+		sessionFamily: "glm",
+		roleModel: (role) => roles[role],
 	});
 
+	test("inherit sentinels and unassigned roles run on the session model, never as literal selectors", () => {
+		const none = lookup({});
+		for (const model of [undefined, "", "auto", "inherit-parent", "@pstack-code", "@pstack-judgment:high"]) {
+			expect(resolveSelection(model, none).modelOverride).toBe("zai/glm-flash");
+		}
+		expect(resolveSelection("@pstack-code", none).label).toBe("@pstack-code unassigned -> zai/glm-flash");
+	});
+
+	test("assigned roles pass their alias through with role identity so OMP applies thinking and fallback chains", () => {
+		const roles = lookup({ "pstack-judgment": { selector: "anthropic/opus", family: "claude" } });
+		expect(resolveSelection("@pstack-judgment:high", roles)).toEqual({
+			modelOverride: "@pstack-judgment:high",
+			modelRole: "pstack-judgment",
+			label: "@pstack-judgment:high -> anthropic/opus",
+		});
+		expect(resolveSelection("openai/gpt-x", roles)).toEqual({ modelOverride: "openai/gpt-x", label: "openai/gpt-x" });
+		expect(resolveSelection("@slow", roles).modelOverride).toBe("@slow");
+	});
+
+	test("cross-family picks the first assigned role outside the session family, then any assigned role, then the session", () => {
+		const mixed = lookup({
+			"pstack-judgment": { selector: "zai/glm-big", family: "glm" },
+			"pstack-code": { selector: "openai/gpt-x", family: "gpt" },
+		});
+		expect(resolveSelection("cross-family", mixed).modelOverride).toBe("@pstack-code");
+
+		const sameFamily = lookup({ "pstack-precise": { selector: "zai/glm-big", family: "glm" } });
+		expect(resolveSelection("cross-family", sameFamily).modelOverride).toBe("@pstack-precise");
+
+		expect(resolveSelection("cross-family", lookup({})).modelOverride).toBe("zai/glm-flash");
+	});
+
+	test("panels expand one assignment per model and slices inherit the request model", () => {
+		const panel = expandAssignments(
+			{ strategy: "panel", prompt: "critique the diff", models: ["a/x", "b/y"] },
+			passThrough,
+		);
+		expect(panel.map((item) => [item.id, item.modelOverride])).toEqual([
+			["panel-0", "a/x"],
+			["panel-1", "b/y"],
+		]);
+
+		const slices = expandAssignments(
+			{
+				strategy: "slice",
+				slices: [
+					{ id: "auth", task: "cover auth" },
+					{ id: "billing", task: "cover billing", model: "c/z" },
+				],
+				model: "a/x",
+			},
+			passThrough,
+		);
+		expect(slices.map((item) => [item.id, item.modelOverride])).toEqual([
+			["auth", "a/x"],
+			["billing", "c/z"],
+		]);
+	});
+});
+
+describe("pstack_task pure helpers", () => {
 	test("executes expanded assignments concurrently through injected runSubprocess", async () => {
 		let active = 0;
 		let maxActive = 0;
@@ -497,11 +593,10 @@ describe("pstack_task pure helpers", () => {
 			};
 		};
 
-		const assignments = expandAssignments({
-			strategy: "panel",
-			prompt: "parallel review",
-			models: ["m1", "m2", "m3"],
-		});
+		const assignments = expandAssignments(
+			{ strategy: "panel", prompt: "parallel review", models: ["m1", "m2", "m3"] },
+			passThrough,
+		);
 
 		const results = await executeAssignments(assignments, {
 			runSubprocess,

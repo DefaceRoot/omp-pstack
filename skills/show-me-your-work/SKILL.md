@@ -6,78 +6,80 @@ disable-model-invocation: true
 
 # Show me your work
 
-For work a human reviews after the fact, a decision trail lets them reconstruct what was decided, why, and on what evidence, without rerunning the work or reading the whole transcript. Keep one canonical log so the trail is consistent and a future agent can find it.
+Keep one canonical log.
 
 ## The format
 
-A single TSV file, one row per decision. TSV because GitHub renders it as a sortable table, `column -s$'\t' -t` and spreadsheets read it, and a row appends with one command. Cells stay single-line. Evidence is a pointer, not prose.
+A single TSV file, one row per decision. Cells stay single-line. Evidence is a pointer, not prose.
 
 Copy `skill://show-me-your-work/references/decision-log-template.tsv` (the header row) to start a clean log. Columns:
 
-- **ts.** ISO8601 timestamp. The timeline axis.
+- **ts.** ISO8601 timestamp.
 - **phase.** The phase or workstream.
 - **decision.** What was chosen or done, one line.
-- **why.** The reason in plain words. If a principle drove it, say it plainly (`explored options first, this was a one-way door`), not as a jargon tag.
+- **why.** The reason in plain words. If a principle drove it, say it plainly, not as a jargon tag.
 - **evidence.** A link or path that proves it: commit SHA, PR number, `file:line`, or an artifact, trace, or screenshot path. Never a paragraph.
 - **result.** The outcome or predicate state: `tests green`, `reverted`, `pixel-diff 0`, `INCONCLUSIVE`, `open`.
 
-An example, plain-spoken so a reviewer reads it at a glance. This is illustration only; don't copy these rows into a real log.
+An example, plain-spoken so a reviewer reads it at a glance.
 
 ```
 ts	phase	decision	why	evidence	result
 2026-05-24T09:02:00Z	frame	counted the work first, about 100 components and roughly 75 hours	wanted to know the size before starting a long run	commit 3a9f1c2	found 5 things to sort out before starting
-2026-05-24T09:40:00Z	harness	took screenshots of the old version before changing anything	so we can compare old against new and catch any visual change	skill://show-me-your-work/scripts/snapshot.sh, baseline/	saved 120 reference screenshots
+2026-05-24T09:40:00Z	baseline	took screenshots of the old version before changing anything	so we can compare old against new and catch any visual change	baseline/	saved 120 reference screenshots
 2026-05-24T11:15:00Z	widget	moved the widget styles over without changing how it looks	keep the change small and the result identical	commit 7c21e0a, pixel-diff 0	looks identical, tests pass
 2026-05-24T12:30:00Z	widget	threw out a helper's work because its screenshots were blank	checked the real files instead of trusting its summary	worktree reset	reverted, tightened the instructions for next time
 ```
 
 ## Logging a row
 
-Write each entry the way you'd tell a teammate what you did. Plain words, concrete actions, no AI speak or abstract jargon (`skill://unslop` applies to log text too). A reviewer should understand each row without decoding it.
+Write each entry the way you'd tell a teammate what you did. Plain words, concrete actions, no abstract jargon (`skill://unslop` applies to log text too).
 
-Use the helper so rows stay well-formed: `skill://show-me-your-work/scripts/log.sh <logfile> <phase> <decision> <why> <evidence> <result>`. It stamps `ts`, writes the header on first use, strips stray tabs/newlines, and prefixes any cell starting with `=`, `+`, `-`, or `@` with a single quote so a reviewer opening the log in a spreadsheet doesn't trigger formula execution. A bare `printf` appending a row works too, but mind those same bytes if cells come from generated or user-supplied text.
+Use `skill://show-me-your-work/scripts/log.sh <logfile> <phase> <decision> <why> <evidence> <result>` to keep rows well-formed. It stamps `ts`, writes the header on first use, strips stray tabs/newlines, and prefixes any cell starting with `=`, `+`, `-`, or `@` with a single quote. This prevents formula execution when a reviewer opens the log in a spreadsheet. A bare `printf` works too if it handles those same bytes in generated or user-supplied text.
 
 Log decision points and checkpoints, not every action: a fork chosen, a unit completed with its verification result, a pivot or revert with its trigger, a blocker surfaced, a gate fixed. For loop runs, one row per iteration. Skip the trivial and self-evident.
 
 ## Where it lives
 
-By default the log is a working artifact, not committed. Keep it at `decisions.tsv` in the work dir, or `.audit/<task-slug>.tsv` when several efforts run at once, and leave it out of git. Most work doesn't need a committed trail; the local log still keeps the run honest and can be discarded after.
+By default the log is a working artifact, not committed. Keep it at `decisions.tsv` in the work dir, or `.audit/<task-slug>.tsv` when several efforts run at once, and leave it out of git.
 
-Commit it only when the work is ambitious enough that a reviewer needs the trail to trust the result: a large cross-language port, a multi-week migration, anything where confidence has to be shown rather than assumed. A committed log renders as a table in the PR.
+Commit it only when the work is ambitious enough that a reviewer needs the trail to trust the result.
 
 ## Rules
 
-- One row is one decision or checkpoint. If it doesn't fit on one line, the decision isn't crisp yet.
 - Append-only. A wrong call gets a new row that supersedes it. Never edit or delete history.
 - Prefer evidence produced by committed scripts over hand-made one-offs, so a reviewer can re-run it (`skill://principle-encode-lessons-in-structure`).
 
 ## Audit the log against the transcript
 
-At the end of the run, check that the log told the truth. Prefer the current OMP session path, an explicit transcript path, or a supplied `history://` or `agent://` reference. Only when none resolves, run `omp config path`, trim its non-empty output as `agent_dir`, and search `<agent_dir>/sessions` recursively. Resolve the profile before searching: if `OMP_PROFILE` is defined, use it even when explicitly empty; only when it is undefined may `PI_PROFILE` supply the value. Trim the selected value. Normalize unset, trimmed-empty, or literal `default` to the default profile; never treat `default` as named or probe `/profiles/default`. A named profile must satisfy OMP's contract: lowercase, 1-64 characters matching `[a-z0-9][a-z0-9._-]{0,63}`, not ending in `.`, and not a reserved device basename (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, or `LPT0`-`LPT9`, including those followed by an extension). Only when `XDG_DATA_HOME` is explicitly set and the applicable omp data root exists, additionally search `$XDG_DATA_HOME/omp/sessions` for the normalized default profile or `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` for a named profile. Do not invent a data-root fallback when `XDG_DATA_HOME` is unset. Named-profile discovery never reads default-profile sessions. Inspect each first JSONL session header and choose the newest file whose `cwd` equals the active workspace and whose message window covers the run. Never cross that workspace boundary without explicit permission. Then:
+At the end of the run, check that the log told the truth. Prefer the current OMP session path, an explicit transcript path, or a supplied `history://` or `agent://` reference. Only when none resolves, run `omp config path`, trim its non-empty output as `agent_dir`, and search `<agent_dir>/sessions` recursively. Resolve the profile before searching: if `OMP_PROFILE` is defined, use it even when explicitly empty. Only when it is undefined may `PI_PROFILE` supply the value. Trim the selected value. Normalize unset, trimmed-empty, or literal `default` to the default profile. Never treat `default` as named or probe `/profiles/default`. A named profile must satisfy OMP's contract: lowercase, 1-64 characters matching `[a-z0-9][a-z0-9._-]{0,63}`, not ending in `.`, and not a reserved device basename (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, or `LPT0`-`LPT9`, including those followed by an extension). Only when `XDG_DATA_HOME` is explicitly set and the applicable omp data root exists, additionally search `$XDG_DATA_HOME/omp/sessions` for the normalized default profile or `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` for a named profile. Do not invent a data-root fallback when `XDG_DATA_HOME` is unset. Named-profile discovery never reads default-profile sessions.
+
 The additional XDG sessions root is eligible only on `linux` or `darwin`, and only when the active `agent_dir` equals the profile-derived default (`isDefault`). With a custom `PI_CODING_AGENT_DIR`, scan only `<custom-agent_dir>/sessions` and skip XDG even if `$XDG_DATA_HOME/omp` exists. On Windows (`win32`), ignore XDG.
 
-- Every row maps to a real action. Cut invented or aspirational entries.
+Inspect each first JSONL session header. Choose the newest file whose `cwd` equals the active workspace and whose message window covers the run. Never cross the workspace boundary without explicit permission. Walk the log against what actually happened:
+
+- Every row maps to a real action. If one is invented or aspirational, append a correction that marks it invalid.
 - Each row's evidence resolves and shows what the row claims.
 - A fork, pivot, or abandoned approach that shaped the work but isn't logged is a gap. Add it.
-- Drop padding. If nobody would audit a row, it doesn't earn its place.
+- Flag padding. Append a correction rather than silently rewriting the trail.
 
 Fix the log, not the story. If the work diverged from what a row claims, the row is wrong.
 
 ## Cross-model review of the trail
 
-Before handing back, call `pstack_task` with `strategy: "slice"`, one `AuditTrail` slice, and a validated selector from a different model family when available. This is a cross-family safety judge, not ordinary same-model fan-out. Self-review is not a substitute. The OMP agent reads the audit trail and matched transcript, then flags what the user should notice. This is a scan for weak evidence and risk, not a redo.
+Before handing back, call `pstack_task` with `strategy: "slice"`, one `AuditTrail` slice, and `model: "cross-family"`. Self-review is not a substitute. The OMP agent reads the audit trail and matched transcript, then flags weak evidence or risk. It does not redo the work.
 
 - Decisions logged with weak or absent evidence.
 - Verification steps skipped or claimed without proof in the transcript.
 - Choices that look risky in hindsight (premature, scope-creeping, papering over a symptom).
 - Gaps the user would otherwise miss on a casual skim.
 
-Every reply for a run that produced a trail ends with an "Attention" section. Lead with the reviewer's model on its own line (`reviewed by <model>`), then list each flag pointing to specific rows or moments. "No flags" is a valid value; the model name is not. The self-audit asks if the log told the truth; this asks what the user should still scrutinize even when it did.
+Every reply for a run that produced a trail ends with an "Attention" section. Lead with the reviewer's model on its own line (`reviewed by <model>`), then list each flag pointing to specific rows or moments. "No flags" is a valid value. The model name is not.
 
 ## Reviewing the trail
 
-Read top to bottom, follow the evidence pointers, spot-check. GitHub renders a committed TSV as a table; `column -s$'\t' -t decisions.tsv` renders it in a terminal. A row whose evidence doesn't resolve, or whose result is unverified, is the audit catching a gap.
+Read top to bottom, follow the evidence pointers, spot-check. GitHub renders a committed TSV as a table. `column -s$'\t' -t decisions.tsv` renders it in a terminal.
 
 ## Composing this skill
 
-Other skills route their audit trail here instead of inventing one. Reference it by name and let it own the format; don't restate the columns.
+Other skills route their audit trail here instead of inventing one. Reference it by name and let it own the format. Don't restate the columns.
