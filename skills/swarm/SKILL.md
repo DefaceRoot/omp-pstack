@@ -31,7 +31,7 @@ For coverage, call native `task` once with shared `context` and one named item p
 
 For an identical-brief race, call native `task` once with the same brief in shared `context`. Give each arm a stable, unique name, a complete task, and a separate output. For N up to three, assign one item per enabled arena runner slot in order until N items are assigned. Disabled slots shrink this panel. For N above three, reuse enabled slots in order until N items are assigned. If none is enabled, report that the race cannot run. Do not put `model` on task items.
 
-For a mixed shape, call native `task` once with one named item per arm. Assign coverage arms to `pstack-swarm-worker` and race arms to suitable enabled arena runner slots. Give each arm a complete task and a separate output. Skip disabled slots rather than substituting a model.
+For a mixed shape, call native `task` once with one named item per arm. Assign coverage arms to `pstack-swarm-worker` and race arms to suitable enabled arena runner slots. For more race arms than enabled slots, reuse slots in order until every race arm is assigned. If no slots are enabled, report that the race cannot run. Give each arm a complete task and a separate output. Skip disabled slots rather than substituting a model.
 
 A worker that needs a non-default pushed branch receives the branch name in its self-contained task and checks it out only in its assigned isolated worktree.
 

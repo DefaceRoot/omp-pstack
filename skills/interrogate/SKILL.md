@@ -49,7 +49,7 @@ Call native `task` once with the filled review template in shared `context`. Add
 
 By default, a slot disabled in `/agents` drops out. For a requested N, use N items, taking enabled slots in A, B, C order and wrapping if needed, with distinct item names. If no slots are enabled, ask the user to enable one. The same filled template goes to all reviewers, so every model applies the code-quality lens. Do not put a model on an item.
 
-If a reviewer fails to spawn, name the failed agent and tell the user to set its model in `/agents`.
+If a reviewer fails to spawn, note the dropout and continue with the remaining reviewers. Name the failed agent and tell the user to check its model in `/agents`.
 
 ## Step 4, Synthesize
 

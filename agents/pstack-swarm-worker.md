@@ -1,6 +1,6 @@
 ---
 name: pstack-swarm-worker
-description: "swarm skill: one coverage slice or one race arm."
+description: "swarm skill: one coverage slice."
 model: "@task"
 blocking: false
 spawns: "*"

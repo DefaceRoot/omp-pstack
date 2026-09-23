@@ -90,7 +90,7 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 **Use OMP agents deliberately.** Use native `task` once for independent slices. Give each item a stable `name`, an `agent` from this roster, and a complete reason-bearing `task`. Put shared instructions in `context`. Do not put `model` on task items. Pass file pointers instead of large inline context.
 
-- `poteto-agent` handles ordinary helpers and sub-coordinators. `pstack-feature` writes feature and refactoring code. `pstack-bug-fix` writes fixes. `pstack-perf` writes performance fixes. `pstack-hillclimb` works through metric hypotheses.
+- `poteto-agent` handles ordinary helpers and sub-coordinators. `pstack-feature` writes feature and refactoring code. `pstack-bug-fix` writes fixes. `pstack-perf` writes performance fixes. `pstack-hillclimb` works through metric hypotheses. `pstack-swarm-worker` handles independent coverage slices.
 - Use `agent: "pstack-judgment"` for prose and judgment. Use `pstack-hardest` for cross-cutting design, concurrency, and subtle algorithms.
 - Panels use `pstack-arena-runner-1` through `-3`, `pstack-architect-runner-1` through `-3`, or `pstack-interrogate-reviewer-a` through `-c`. Spawn one named item per active slot. Disabled slots shrink the panel. For more members than slots, reuse slots in order.
 - `pstack-cross-judge` handles audits and second opinions. It uses a different model family from the spawning session when possible.
