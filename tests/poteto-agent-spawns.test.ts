@@ -10,15 +10,6 @@ import { join } from "node:path";
  * for durable background sub-coordinators. Discovery only activates native
  * `task` for further spawning when packaged agent frontmatter declares
  * `spawns: "*"` (OMP AgentDefinition: `spawns?: string[] | "*"`).
- *
- * Boundary guard (do not duplicate here): pstack_task programmatic
- * AgentDefinitions intentionally omit `spawns` so executor leaves empty
- * spawnsEnv and does not auto-add recursive `task`. That contract lives in
- * `tests/runtime-extension.test.ts` ("every AgentDefinition passed to raw
- * runSubprocess omits tools and spawns…") via
- * `preservesStandardNativeToolsWithoutRecursion`. This suite only pins the
- * packaged markdown agent seam; it must not weaken or restate that runtime
- * RED, and it must not assert against `src/pstack-task.ts` source text.
  */
 
 const ROOT = join(import.meta.dir, "..");

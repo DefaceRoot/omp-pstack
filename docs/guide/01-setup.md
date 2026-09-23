@@ -1,6 +1,6 @@
 # Set up P-Stack
 
-Install the plugin, inspect the model roles, then run a real task. Model choices live in OMP's native pickers, not in a project rule.
+Install the plugin, configure its agents, then run a real task. Model choices live in `/agents`, not in a project rule.
 
 ## Install the plugin
 
@@ -10,25 +10,48 @@ Install the extension from a terminal:
 omp install github:DefaceRoot/omp-pstack
 ```
 
-OMP installs and enables `@defaceroot/omp-pstack`. Confirm it with `omp plugin list --json`, then start a fresh OMP session so its skills, agents, tools, and slash aliases are discovered.
+OMP installs and enables `@defaceroot/omp-pstack`. Confirm it with `omp plugin list --json`, then start a fresh OMP session so its skills, agents, and slash aliases are discovered.
 
 ## Pick your models
 
-Open `/model` → Roles. Assign models to any of the three P-Stack roles:
+Open `/agents` to set each P-Stack agent's model and thinking level. Each slot defaults to the listed OMP built-in role.
 
-| Role | Agent | Work |
+| Agent | Job | Default built-in role |
 |---|---|---|
-| P-Stack Code (`@pstack-code`) | `poteto-agent` | Code delegates, exploration, and ordinary helpers. |
-| P-Stack Judgment (`@pstack-judgment`) | `poteto-judgment` | Hard changes, prose, synthesis, and judgment. |
-| P-Stack Precise (`@pstack-precise`) | `poteto-precise` | Precisely specified execution and reflect tooling review. |
+| `poteto-agent` | Ordinary helpers and sub-coordinators | `@task` |
+| `pstack-feature` | Feature and refactoring delegates | `@task` |
+| `pstack-bug-fix` | Bug-fix delegates | `@task` |
+| `pstack-perf` | Performance delegates | `@task` |
+| `pstack-hillclimb` | Per-hypothesis delegates | `@task` |
+| `pstack-judgment` | Prose and judgment | `@slow` |
+| `pstack-hardest` | Cross-cutting design and difficult tasks | `@slow` |
+| `pstack-how-explorer` | Subsystem exploration | `@task` |
+| `pstack-how-explainer` | Subsystem explanation and synthesis | `@slow` |
+| `pstack-why-investigator` | Evidence gathering for rationale | `@task` |
+| `pstack-why-synthesizer` | Rationale synthesis | `@slow` |
+| `pstack-reflect-tooling` | Reflection on tools | `@task` |
+| `pstack-reflect-judgment` | Reflection on decisions | `@slow` |
+| `pstack-reflect-divergent` | Divergent reflection | `@slow` |
+| `pstack-reflect-synthesizer` | Reflection synthesis | `@slow` |
+| `pstack-swarm-worker` | Independent coverage slices | `@task` |
+| `pstack-arena-runner-1` | Arena candidate 1 | `@default` |
+| `pstack-arena-runner-2` | Arena candidate 2 | `@slow` |
+| `pstack-arena-runner-3` | Arena candidate 3 | `@task` |
+| `pstack-architect-runner-1` | Architect design candidate 1 | `@default` |
+| `pstack-architect-runner-2` | Architect design candidate 2 | `@slow` |
+| `pstack-architect-runner-3` | Architect design candidate 3 | `@task` |
+| `pstack-interrogate-reviewer-a` | Adversarial reviewer A | `@default` |
+| `pstack-interrogate-reviewer-b` | Adversarial reviewer B | `@slow` |
+| `pstack-interrogate-reviewer-c` | Adversarial reviewer C | `@task` |
+| `pstack-cross-judge` | Blind judging and second opinions | `@slow`, `@default`, `@task` pool |
 
-An unassigned role inherits your session model. In `/agents`, you can override the model on any of those three agents. A panel uses the three role assignments, and a cross-family judge chooses an assigned role from a family different from the session model when one is available.
+Arena, architect, and interrogate have three slots each. Disable a slot in `/agents` to shrink that panel. Set different model families on its slots for diversity. If you request more members than enabled slots, the skill reuses slots in order. For `pstack-cross-judge`, the extension prefers a pool entry whose family differs from the spawning session's model.
 
-Run `/setup-pstack` to see the three role assignments and any `/agents` overrides. It explains where to change them. It also offers to delete a legacy `<agent_dir>/rules/pstack-models.md` left by older omp-pstack versions. Accept or decline that cleanup as appropriate. Changing a role or agent override takes effect on the next spawn. You do not need to restart OMP.
+Run `/setup-pstack` to list every P-Stack agent and its effective model. It offers to delete a legacy routing rule left by older installs. Changing an agent override takes effect on the next spawn without restarting OMP.
 
-Native `task` handles ordinary independent slices. Call it once with shared `context` and named items, each with an `agent` and a complete reason-bearing `task`. No `model` field belongs on native task items. Idle children park automatically. Use `hub` to inspect and revive them. Reserve `pstack_task` for panels, explicit per-arm selection, races, and cross-family judges.
+Native `task` handles panels and independent slices. Call it once per fan-out with shared `context` and named items. Each item has an agent name and a complete reason-bearing `task`. Model choices belong in `/agents`, not in task items. Idle children park automatically. Use `hub` to inspect and revive them.
 
-`/pstack-status` reports mode ON/OFF and the role → model summary. `/pstack-cleanup` asks for confirmation before clearing the three `modelRoles.pstack-*` assignments, clearing model overrides for the three Poteto agents in `/agents`, and deleting the legacy rule file if present.
+`/pstack-status` reports mode ON/OFF and effective agent models. `/pstack-cleanup` asks for confirmation before clearing P-Stack agent overrides and disabled entries and deleting the legacy rule file if present.
 
 ## Accept the verification offer, or don't
 

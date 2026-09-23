@@ -32,7 +32,7 @@
     "url": "https://github.com/DefaceRoot/omp-pstack/issues"
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": ">=17.2.13"
+    "@oh-my-pi/pi-coding-agent": ">=18.2.11"
   },
   "peerDependenciesMeta": {
     "@oh-my-pi/pi-coding-agent": {

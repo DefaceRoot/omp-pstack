@@ -67,14 +67,14 @@ Fix the log, not the story. If the work diverged from what a row claims, the row
 
 ## Cross-model review of the trail
 
-Before handing back, call `pstack_task` with `strategy: "slice"`, one `AuditTrail` slice, and `model: "cross-family"`. Self-review is not a substitute. The OMP agent reads the audit trail and matched transcript, then flags weak evidence or risk. It does not redo the work.
+Before handing back, call native `task` with shared context and one named `AuditTrail` item using `agent: "pstack-cross-judge"`. Give the reviewer a complete task to read the audit trail and matched transcript, then flag weak evidence or risk without redoing the work. The reviewer uses a different model family from the spawning session when possible. Self-review is not a substitute.
 
 - Decisions logged with weak or absent evidence.
 - Verification steps skipped or claimed without proof in the transcript.
 - Choices that look risky in hindsight (premature, scope-creeping, papering over a symptom).
 - Gaps the user would otherwise miss on a casual skim.
 
-Every reply for a run that produced a trail ends with an "Attention" section. Lead with the reviewer's model on its own line (`reviewed by <model>`), then list each flag pointing to specific rows or moments. "No flags" is a valid value. The model name is not.
+Every reply for a run that produced a trail ends with an "Attention" section. Lead with the reviewer's actual model on its own line (`reviewed by <model>`), then list each flag pointing to specific rows or moments. Report "No flags" when there are none. Do not substitute the agent name for the model.
 
 ## Reviewing the trail
 

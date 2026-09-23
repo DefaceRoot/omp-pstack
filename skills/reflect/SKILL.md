@@ -22,19 +22,19 @@ If no transcript reference or path resolves, write a tight digest of the current
 
 ### 2. Spawn three reviewers in parallel
 
-Call native `task` once with shared `context` and three stable items: `judgment` and `divergent` use `agent: "poteto-judgment"`, while `tooling` uses `agent: "poteto-precise"`. Build each complete reason-bearing `task` from its prompt template. Do not add a `model` field. Prompts forbid writes but allow configured MCP tools for citation checks. The parent applies edits.
+Call native `task` once with shared `context` and three named items. Assign each item the agent below and a complete reason-bearing `task` from its prompt template. Do not add a `model` field. Prompts forbid writes but allow configured MCP tools for citation checks. The parent applies edits.
 
-| Lens | Prompt template |
-|---|---|
-| Judgment | `skill://reflect/references/judgment-reviewer.md` |
-| Tooling | `skill://reflect/references/tooling-reviewer.md` |
-| Divergent | `skill://reflect/references/divergent-reviewer.md` |
+| Item | Agent | Prompt template |
+|---|---|---|
+| `judgment` | `agent: "pstack-reflect-judgment"` | `skill://reflect/references/judgment-reviewer.md` |
+| `tooling` | `agent: "pstack-reflect-tooling"` | `skill://reflect/references/tooling-reviewer.md` |
+| `divergent` | `agent: "pstack-reflect-divergent"` | `skill://reflect/references/divergent-reviewer.md` |
 
 Pass each template verbatim, substituting the transcript path or digest where marked. Native task auto-delivers each reviewer's findings.
 
 ### 3. Synthesize
 
-Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "poteto-judgment"` and give it a complete reason-bearing `task` based on `skill://reflect/references/synthesizer.md`. Insert every reviewer's full output where marked. Do not add a `model` field. The task forbids writes but allows configured MCP tools for citation spot-checks. The synthesizer returns a structured Accepted, Rejected, and Backlog list.
+Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "pstack-reflect-synthesizer"` and give it a complete reason-bearing `task` based on `skill://reflect/references/synthesizer.md`. Insert every reviewer's full output where marked. Do not add a `model` field. The task forbids writes but allows configured MCP tools for citation spot-checks. The synthesizer returns a structured Accepted, Rejected, and Backlog list.
 
 ### 4. Structural enforcement check
 

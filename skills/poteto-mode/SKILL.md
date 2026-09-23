@@ -88,13 +88,18 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 ## Subagents
 
-**Use OMP agents deliberately.** Native `task` is the default. Call it once for independent slices, with shared `context`, a stable `name`, and a complete reason-bearing `task` for each item. Use `agent: "poteto-agent"` for code delegates and ordinary helpers, `agent: "poteto-judgment"` for the hardest changes, prose, and judgment, and `agent: "poteto-precise"` for precisely specified step sequences. Routed workflow skills choose their own agents. Do not put `model` on native task items. Pass file pointers instead of large inline context.
+**Use OMP agents deliberately.** Use native `task` once for independent slices. Give each item a stable `name`, an `agent` from this roster, and a complete reason-bearing `task`. Put shared instructions in `context`. Do not put `model` on task items. Pass file pointers instead of large inline context.
 
-The three agents run on `@pstack-code`, `@pstack-judgment`, and `@pstack-precise` roles assigned in `/model` → Roles, overridable per agent in `/agents`. Unassigned roles inherit the session model. Reserve `pstack_task` for panels (`strategy: "panel"`, `models: ["@pstack-judgment", "@pstack-precise", "@pstack-code"]`), model races, and `model: "cross-family"` judges. Use `strategy: "slice"` with one slice for a cross-family judge.
+- `poteto-agent` handles ordinary helpers and sub-coordinators. `pstack-feature` writes feature and refactoring code. `pstack-bug-fix` writes fixes. `pstack-perf` writes performance fixes. `pstack-hillclimb` works through metric hypotheses.
+- Use `agent: "pstack-judgment"` for prose and judgment. Use `pstack-hardest` for cross-cutting design, concurrency, and subtle algorithms.
+- Panels use `pstack-arena-runner-1` through `-3`, `pstack-architect-runner-1` through `-3`, or `pstack-interrogate-reviewer-a` through `-c`. Spawn one named item per active slot. Disabled slots shrink the panel. For more members than slots, reuse slots in order.
+- `pstack-cross-judge` handles audits and second opinions. It uses a different model family from the spawning session when possible.
+
+Set each agent's model and thinking level in `/agents`. Defaults follow OMP's bundled roles (`@task`, `@slow`, `@default`).
 
 Idle native `task` children park automatically. Use `hub` to inspect, wake, or revive them. Native task owns job visibility, persisted child sessions, and auto-delivery.
 
-You own every subagent's work. Review the diff and write your own summary, don't pass through what it said. Interrupt-chained resumes silently drop directives, so fire a fresh subagent with consolidated scope rather than trusting a "done" summary. A second opinion is the same prompt against a different model. Agreement is high-signal.
+You own every subagent's work. Review the diff and write your own summary, don't pass through what it said. Interrupt-chained resumes silently drop directives, so fire a fresh subagent with consolidated scope rather than trusting a "done" summary. Send the same prompt to `pstack-cross-judge` for a second opinion. Agreement is high-signal.
 
 ## Writing the reply
 

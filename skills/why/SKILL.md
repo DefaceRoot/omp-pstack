@@ -75,7 +75,7 @@ Source control is always available through git and `gh`. For the other six, clas
 
 Aim for a complete **coverage map**, not a minimal one. Document the null, don't skip the search.
 
-Launch all matching investigators concurrently with one native `task` batch. Put the common question, code anchor, and no-write rules in shared `context`. Create one item per evidence category with a stable `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task`. Do not add a `model` field. Each investigator owns one source and may use configured MCP tools to investigate it. Do not ask one agent to cover multiple MCPs.
+Launch all matching investigators concurrently with one native `task` batch. Put the common question, code anchor, and no-write rules in shared `context`. Create one item per evidence category with a stable `name`, `agent: "pstack-why-investigator"`, and a complete reason-bearing `task`. Do not add a `model` field. Each investigator owns one source and may use configured MCP tools to investigate it. Do not ask one agent to cover multiple MCPs.
 
 Each investigator gets:
 1. The base prompt from `skill://why/references/investigator-prompt.md`
@@ -115,7 +115,7 @@ If your scope assessment suggests a single-commit trivial target where the PR de
 
 ## Step 4. Synthesize
 
-Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "poteto-judgment"` and give it a complete reason-bearing `task`. Do not add a `model` field. The task forbids writes but allows citation spot-checks through configured OMP MCP tools.
+Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "pstack-why-synthesizer"` and give it a complete reason-bearing `task`. Do not add a `model` field. The task forbids writes but allows citation spot-checks through configured OMP MCP tools.
 
 The synthesizer gets:
 1. The investigator findings, including any null results and any categories skipped with justification

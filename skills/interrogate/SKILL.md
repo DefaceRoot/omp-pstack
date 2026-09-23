@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Interrogate
 
-Spawn one reviewer per configured model to adversarially review code changes. Each model gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas.
+Spawn one reviewer per enabled reviewer slot to adversarially review code changes. Each reviewer gets the same prompt and rubric. Model diversity comes from assigning the slots different model families in `/agents`, not from assigned personas.
 
 The deliverable is a synthesized verdict. Do NOT auto-apply changes.
 
@@ -33,25 +33,23 @@ Write one clear paragraph. If you're unsure about the intent, ask the user befor
 
 ## Step 3, Spawn Reviewers
 
-Launch all reviewers in one `pstack_task` panel. Use the default roles below. If the user asks for N reviewers, repeat role aliases or use explicit selectors so `models` has N entries.
-
-| Reviewer | Model role |
-|----------|------------|
-| Reviewer A | `@pstack-judgment` |
-| Reviewer B | `@pstack-precise` |
-| Reviewer C | `@pstack-code` |
-
-Call `pstack_task` once with `strategy: "panel"`, the fully filled review template as `prompt`, and `models: ["@pstack-judgment", "@pstack-precise", "@pstack-code"]` by default. The extension runs one parallel OMP agent per panel entry. The prompt makes the review read-only by contract.
-
-If `pstack_task` rejects a selector, report the error and ask the user to fix the role in `/model`.
-
 Read `skill://interrogate/references/reviewer-prompt.md` and fill in the template with:
 1. The stated intent
 2. The diff or file contents
 3. The review rubric from `skill://interrogate/references/rubric.md`
 4. The code-quality lens from `skill://interrogate/references/code-quality-review.md`
 
-The same filled template goes to all reviewers, so every model applies the code-quality lens.
+Call native `task` once with the filled review template in shared `context`. Add one named item for each selected reviewer slot. Keep the review read-only in every item's `task`.
+
+| Reviewer | Agent |
+|----------|-------|
+| Reviewer A | `pstack-interrogate-reviewer-a` |
+| Reviewer B | `pstack-interrogate-reviewer-b` |
+| Reviewer C | `pstack-interrogate-reviewer-c` |
+
+By default, a slot disabled in `/agents` drops out. For a requested N, use N items, taking enabled slots in A, B, C order and wrapping if needed, with distinct item names. If no slots are enabled, ask the user to enable one. The same filled template goes to all reviewers, so every model applies the code-quality lens. Do not put a model on an item.
+
+If a reviewer fails to spawn, name the failed agent and tell the user to set its model in `/agents`.
 
 ## Step 4, Synthesize
 

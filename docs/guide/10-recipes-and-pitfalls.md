@@ -85,7 +85,7 @@ That's the whole prompt. [`/bro`](../../skills/bro/SKILL.md) restates the last m
 - **Parallel agents in one worktree.** They overwrite each other and the diff becomes archaeology. Say "own worktree per attempt" and the isolation is free.
 - **Using `/arena` for coverage.** `/arena` repeats one design or code brief, then picks a base and grafts the best parts. `/swarm` partitions slices or declared race arms and aggregates one report.
 - **Accepting every review comment.** Bots and humans both file real catches and noise in one list. `/interrogate` sorts findings into act-on and dismissed buckets with reasons, and you can override either way.
-- **Pinning model slugs in skill text.** Assign P-Stack Code, Judgment, and Precise in `/model` → Roles. An unassigned role inherits the session model. [Setup](./01-setup.md) covers agent overrides in `/agents`.
+- **Pinning model slugs in skill text.** Set P-Stack agents' models and thinking levels in `/agents`. [Setup](./01-setup.md) lists every slot and its default.
 - **Reporting success off a green build.** A build proves it compiles. Ask for the real command, flow, stored value, or profile, and expect the evidence in the reply.
 - **Writing a `SKILL.md` freehand.** Route it through the [Authoring or modifying a skill playbook](../../skills/poteto-mode/playbooks/authoring-a-skill.md) so validation and review happen.
 

@@ -28,11 +28,11 @@ omp plugin list --json
 
 The result should include `@defaceroot/omp-pstack` as an enabled plugin. Start a fresh OMP session if the current one predates the installation.
 
-Requires OMP >=17.2.13 for runtime safety. `pstack_task` depends on strict structured-yield enforcement, MCP-safe child extension isolation (`enableMCP` with empty preloaded paths), live settings APIs, and active-profile `getAgentDir`.
+Requires OMP >=18.2.11 for the `before_subagent_spawn` hook that selects a judge from its model pool.
 
 ## Get started
 
-1. Run `/setup-pstack` to inspect the three model roles and any agent overrides. Assign models in `/model` → Roles if you want different models for P-Stack work.
+1. Run `/setup-pstack` to list the effective model for each P-Stack agent. Set each agent's model and thinking level in `/agents`.
 2. Use [`/poteto-mode`](./skills/poteto-mode/SKILL.md) for a task that needs rigor.
 
 New here? The [P-Stack guide](./docs/guide/README.md) walks through setup, prompting, verification, and overnight runs. The other skills are situational. `/poteto-mode` calls them as its steps need them.
@@ -106,7 +106,7 @@ Start a task with [`/poteto-mode`](./skills/poteto-mode/SKILL.md). It matches yo
 | [`/swarm`](./skills/swarm/SKILL.md) | you want N parallel workers across different slices or races, then one aggregated report. |
 | [`/interrogate`](./skills/interrogate/SKILL.md) | you have a diff and want several different models to try to break it, including a strict code-quality lens. |
 | [`/automate-me`](./skills/automate-me/SKILL.md) | you want your own `-mode` skill, drafted from how you've actually worked. |
-| `/setup-pstack` | inspect the three P-Stack roles, agent overrides, and available setup cleanup. |
+| `/setup-pstack` | list P-Stack agents, their effective models, and available setup cleanup. |
 | [`/reflect`](./skills/reflect/SKILL.md) | a long task landed and you want the recipe captured as a skill edit. |
 | [`/teach`](./skills/teach/SKILL.md) | you want to actually understand a change or subsystem, not just have it summarized. runs how + why and weaves one plain explanation, built up diagram by diagram. |
 | [`/tdd`](./skills/tdd/SKILL.md) | you're fixing a bug and there's a cheap local test path. write the failing test first, then the fix. |
@@ -124,7 +124,7 @@ Start a task with [`/poteto-mode`](./skills/poteto-mode/SKILL.md). It matches yo
 
 ### Agents and principles
 
-The shipped `poteto-agent` reads [`skill://poteto-mode`](./skills/poteto-mode/SKILL.md) before work. Use `agent: "poteto-agent"` in native `task` items instead of a generic agent when that workflow matters. The `poteto-judgment` and `poteto-precise` agents handle their respective roles. [Comment Sicko](./agents/comment-sicko.md) reviews comments, usually through [`/no-comments`](./skills/no-comments/SKILL.md).
+The shipped `poteto-agent` reads [`skill://poteto-mode`](./skills/poteto-mode/SKILL.md) before work. Use `agent: "poteto-agent"` in native `task` items instead of a generic agent when that workflow matters. Specialized agents cover P-Stack's other model slots. [Comment Sicko](./agents/comment-sicko.md) reviews comments, usually through [`/no-comments`](./skills/no-comments/SKILL.md).
 
 Twenty-three short principle skills back the index in `/poteto-mode`. Other skills can reference each rule by name:
 
@@ -161,29 +161,52 @@ Twenty-three short principle skills back the index in `/poteto-mode`. Other skil
 
 ### Make it yours
 
-[`/automate-me`](./skills/automate-me/SKILL.md) reads your recent work, asks which habits belong in a personal mode, and drafts a skill alongside `/poteto-mode`. See [Make it yours](./docs/guide/09-make-it-yours.md) for the workflow. Model assignments stay in `/model` → Roles, with optional agent overrides in `/agents`.
+[`/automate-me`](./skills/automate-me/SKILL.md) reads your recent work, asks which habits belong in a personal mode, and drafts a skill alongside `/poteto-mode`. See [Make it yours](./docs/guide/09-make-it-yours.md) for the workflow. Set each P-Stack agent's model and thinking level in `/agents`.
 
 ## Use in OMP
 
-### Configure model routing
+### Configure agent models
 
-In `/model` → Roles, assign any of the following roles. Each unassigned role inherits the current session model. `/agents` lets you override the model on any of the three shipped agents.
+Open `/agents` to set each P-Stack agent's model and thinking level. Defaults follow OMP's built-in roles. An unchanged slot uses its listed default.
 
-| OMP role | Display name | Agent | Typical work |
-|---|---|---|---|
-| `@pstack-code` | P-Stack Code | `poteto-agent` | Feature, refactoring, bug-fix, perf, hillclimb, exploration, ordinary helpers. |
-| `@pstack-judgment` | P-Stack Judgment | `poteto-judgment` | Hardest changes, prose, synthesis, and judgment. |
-| `@pstack-precise` | P-Stack Precise | `poteto-precise` | Precisely specified execution and reflect tooling review. |
+| Agent | Job | Default built-in role |
+|---|---|---|
+| `poteto-agent` | Ordinary helpers and sub-coordinators | `@task` |
+| `pstack-feature` | Feature and refactoring delegates | `@task` |
+| `pstack-bug-fix` | Bug-fix delegates | `@task` |
+| `pstack-perf` | Performance delegates | `@task` |
+| `pstack-hillclimb` | Per-hypothesis delegates | `@task` |
+| `pstack-judgment` | Prose and judgment | `@slow` |
+| `pstack-hardest` | Cross-cutting design and difficult tasks | `@slow` |
+| `pstack-how-explorer` | Subsystem exploration | `@task` |
+| `pstack-how-explainer` | Subsystem explanation and synthesis | `@slow` |
+| `pstack-why-investigator` | Evidence gathering for rationale | `@task` |
+| `pstack-why-synthesizer` | Rationale synthesis | `@slow` |
+| `pstack-reflect-tooling` | Reflection on tools | `@task` |
+| `pstack-reflect-judgment` | Reflection on decisions | `@slow` |
+| `pstack-reflect-divergent` | Divergent reflection | `@slow` |
+| `pstack-reflect-synthesizer` | Reflection synthesis | `@slow` |
+| `pstack-swarm-worker` | Independent coverage slices | `@task` |
+| `pstack-arena-runner-1` | Arena candidate 1 | `@default` |
+| `pstack-arena-runner-2` | Arena candidate 2 | `@slow` |
+| `pstack-arena-runner-3` | Arena candidate 3 | `@task` |
+| `pstack-architect-runner-1` | Architect design candidate 1 | `@default` |
+| `pstack-architect-runner-2` | Architect design candidate 2 | `@slow` |
+| `pstack-architect-runner-3` | Architect design candidate 3 | `@task` |
+| `pstack-interrogate-reviewer-a` | Adversarial reviewer A | `@default` |
+| `pstack-interrogate-reviewer-b` | Adversarial reviewer B | `@slow` |
+| `pstack-interrogate-reviewer-c` | Adversarial reviewer C | `@task` |
+| `pstack-cross-judge` | Blind judging and second opinions | `@slow`, `@default`, `@task` pool |
 
-The default panel uses `@pstack-judgment`, `@pstack-precise`, and `@pstack-code`. Change role assignments in `/model` or agent overrides in `/agents`. The next spawn resolves them without restarting OMP.
+The arena, architect, and interrogate panels have three slots each. Disable a slot in `/agents` to shrink its panel. Set slots to models from different families for diverse attempts. For more members than enabled slots, the skill reuses slots in order. `pstack-cross-judge` uses an ordered model pool. The extension prefers an entry from a different family than the spawning session's model.
 
-`/setup-pstack` shows all three role assignments and any `/agents` overrides, explains both pickers, offers to remove a legacy `<agent_dir>/rules/pstack-models.md` from older omp-pstack versions, and offers `/create-verification-skill` if the project has no `.omp/skills/verify-*` skill. It does not write a routing rule. `/pstack-status` shows whether the session mode is ON or OFF and summarizes the role → model mapping.
+`/setup-pstack` lists every P-Stack agent with its effective model and offers to remove a legacy rule file from older installs. It also offers `/create-verification-skill` if the project has no `.omp/skills/verify-*` skill. `/pstack-status` shows whether the session mode is ON or OFF and summarizes the effective agent models.
 
-Use native `task` for ordinary independent slices. Call it once with shared `context` and named items, each with an `agent` and complete `task`. Do not put a `model` field on native task items. Idle children park automatically. Use `hub` to inspect and revive them. Reserve `pstack_task` for panels, explicit per-arm model selection, model races, and cross-family judges. A panel uses `strategy: "panel"` and `models: ["@pstack-judgment", "@pstack-precise", "@pstack-code"]`. A cross-family judge uses `strategy: "slice"` with one slice whose `model` is `"cross-family"`.
+Use native `task` for panels and independent slices. Call it once per fan-out with shared `context` and named items. Each item names a roster agent and has a complete `task`. Model choices come from `/agents`, not the task item. Idle children park automatically. Use `hub` to inspect and revive them.
 
 ### Enable the workflow mode
 
-Run `/poteto-mode` to enable P-Stack workflow guidance for this session. Use `/pstack-status` to inspect the mode and role mapping; `/pstack-off` turns the mode off. Ctrl+Alt+O places the visible `/poteto-mode ` prefix in the editor so you can type a goal and submit. While active, the status bar shows the Poteto indicator, or `[P] poteto` with the ASCII symbol preset.
+Run `/poteto-mode` to enable P-Stack workflow guidance for this session. Use `/pstack-status` to inspect the mode and agent models. `/pstack-off` turns the mode off. Ctrl+Alt+O places the visible `/poteto-mode ` prefix in the editor so you can type a goal and submit. While active, the status bar shows the Poteto indicator, or `[P] poteto` with the ASCII symbol preset.
 
 Ctrl+Alt+P remains Plannotator's plan-mode shortcut. Ctrl+Shift+P is OMP's built-in reverse model cycle and cannot be overridden by this plugin. OMP's public extension API does not expose native editor or status-frame colors, so the extension cannot add a yellow native border.
 
@@ -214,7 +237,7 @@ Disabling prevents OMP from loading the plugin but keeps it installed:
 omp plugin disable @defaceroot/omp-pstack
 ```
 
-Disabling does not clear role assignments, agent model overrides, or files created by P-Stack workflows. For a clean removal, run `/pstack-cleanup` while the plugin is enabled. It asks for confirmation before clearing the three `modelRoles.pstack-*` assignments, clearing `/agents` model overrides for the three Poteto agents, and deleting the legacy rule file if present. Declining leaves them unchanged. Then uninstall:
+Disabling does not clear P-Stack agent model overrides, disabled slots, or files created by P-Stack workflows. For a clean removal, run `/pstack-cleanup` while the plugin is enabled. It asks for confirmation before clearing P-Stack agent overrides and disabled entries and deleting the legacy routing rule if present. Declining leaves them unchanged. Then uninstall:
 
 ```sh
 omp plugin uninstall @defaceroot/omp-pstack

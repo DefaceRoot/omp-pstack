@@ -1,27 +1,7 @@
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import {
-	PSTACK_ROLES,
-	resolveSelection,
-	roleAlias,
-	roleForAgent,
-	type PstackRoleId,
-	type RoleLookup,
-} from "./model-roles.ts";
-import {
-	createLiveConcurrencyLimiter,
-	executeAssignments,
-	expandAssignments,
-	normalizeResponsesToolTurns,
-	type AssignmentProgress,
-	type AssignmentRequest,
-	type AssignmentResult,
-	type ChildLifecyclePolicy,
-	type RunSubprocessFn,
-	type SubprocessProgress,
-} from "./pstack-task.ts";
 
 const DIRECT_SKILLS = [
 	"architect",
@@ -62,7 +42,6 @@ export type RemoveFileFn = (path: string) => void | Promise<void>;
 export type PstackExtensionOptions = {
 	packageRoot?: string;
 	homeDir?: string;
-	runSubprocess?: RunSubprocessFn;
 	readFile?: ReadTextFileFn;
 	removeFile?: RemoveFileFn;
 	filesystem?: {
@@ -71,28 +50,16 @@ export type PstackExtensionOptions = {
 	};
 };
 
-type ActiveModel = {
-	provider: string;
-	id: string;
-};
-
-/** Shapes guaranteed by OMP's settings schema. Keys may be absent on older runtimes. */
+type ActiveModel = { provider: string; id: string };
 type SettingsValues = {
 	"task.agentModelOverrides": Record<string, string | string[]>;
-	"task.maxConcurrency": unknown;
-	modelTags: Record<string, unknown>;
+	"task.disabledAgents": string[];
 };
-
 type SettingsApi = {
 	get?: <K extends keyof SettingsValues>(key: K) => SettingsValues[K] | undefined;
 	set?: <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => void;
-	override?: (key: string, value: unknown) => void;
-	getModelRole?: (role: string) => string | undefined;
-	setModelRole?: (role: string, value: string | undefined) => void;
 };
-
 type SymbolPreset = "unicode" | "nerd" | "ascii";
-
 type CommandContext = {
 	cwd: string;
 	ui: {
@@ -101,73 +68,43 @@ type CommandContext = {
 		setStatus: (key: string, text: string | undefined) => void;
 		setEditorText: (text: string) => void;
 		getEditorText: () => string;
-		theme: {
-			getSymbolPreset: () => SymbolPreset;
-		};
+		theme: { getSymbolPreset: () => SymbolPreset };
 	};
 	sessionManager: {
 		getBranch?: () => unknown[];
 		getEntries?: () => unknown[];
-		getArtifactsDir?: () => string | null | undefined;
 	};
 	model?: ActiveModel;
-	modelRegistry?: unknown;
 	models?: {
-		registry?: unknown;
-		current?: () => ActiveModel | undefined;
-		resolve?: (spec: string) => ActiveModel | undefined;
-		family?: (model: ActiveModel) => string;
+		current: () => ActiveModel | undefined;
+		resolve: (spec: string) => ActiveModel | undefined;
+		family: (model: ActiveModel) => string;
 	};
 };
-
 type ExtensionApi = {
 	registerCommand: (
 		name: string,
-		options: {
-			description?: string;
-			handler: (args: string, ctx: CommandContext) => void | Promise<void>;
-		},
+		options: { description?: string; handler: (args: string, ctx: CommandContext) => void | Promise<void> },
 	) => void;
 	registerShortcut: (
 		shortcut: string,
-		options: {
-			description?: string;
-			handler: (ctx: CommandContext) => void | Promise<void>;
-		},
+		options: { description?: string; handler: (ctx: CommandContext) => void | Promise<void> },
 	) => void;
-	registerTool: (tool: Record<string, unknown>) => void;
-	on: (
-		event: string,
-		handler:
-			| ((event: unknown, ctx: CommandContext) => unknown)
-			| ((event: { systemPrompt?: string | string[] }, ctx: CommandContext) => unknown)
-			| ((event: SubagentSpawnEvent, ctx: CommandContext) => unknown),
-	) => void;
+	on(event: "before_subagent_spawn", handler: (event: SubagentSpawnEvent, ctx: CommandContext) => unknown): void;
+	on(event: "before_agent_start", handler: (event: { systemPrompt?: string | string[] }, ctx: CommandContext) => unknown): void;
+	on(event: string, handler: (event: unknown, ctx: CommandContext) => unknown): void;
 	appendEntry: (customType: string, data?: unknown) => void;
 	sendUserMessage?: (content: unknown, options?: unknown) => void;
 	sendMessage?: (message: unknown, options?: unknown) => void;
-	zod: {
-		object: (shape: Record<string, unknown>) => unknown;
-		string: () => unknown;
-		array: (schema: unknown) => unknown;
-	};
 	pi?: {
-		runSubprocess?: RunSubprocessFn;
 		settings?: SettingsApi;
 		getAgentDir?: () => string;
 		VERSION?: string;
 	};
 };
-
-type SubagentSpawnEvent = {
-	agent?: string;
-	patterns?: string[];
-};
-
-type SkillDocument = {
-	body: string;
-	metadata: Record<string, string>;
-};
+type SubagentSpawnEvent = { agent: string; patterns: string[] };
+type SkillDocument = { body: string; metadata: Record<string, string> };
+type AgentDefinition = { name: string; description: string; model: string | string[] };
 
 function parseSkillDocument(source: string): SkillDocument {
 	if (!source.startsWith("---")) return { body: source, metadata: {} };
@@ -185,6 +122,24 @@ function parseSkillDocument(source: string): SkillDocument {
 	return { body: bodyStart < 0 ? "" : source.slice(bodyStart + 1).replace(/^\r?\n/, ""), metadata };
 }
 
+function parseFrontmatterValue(value: string): unknown {
+	if (value.startsWith('"') || value.startsWith("[")) return JSON.parse(value);
+	return value;
+}
+
+function parseAgentDefinition(metadata: Record<string, string>): AgentDefinition {
+	const name = metadata.name;
+	const description = metadata.description === undefined ? undefined : parseFrontmatterValue(metadata.description);
+	const model = metadata.model === undefined ? undefined : parseFrontmatterValue(metadata.model);
+	if (
+		!name || typeof description !== "string" ||
+		!(typeof model === "string" || (Array.isArray(model) && model.every((entry) => typeof entry === "string")))
+	) {
+		throw new Error(`Invalid P-Stack agent frontmatter for ${name ?? "unnamed agent"}`);
+	}
+	return { name, description, model };
+}
+
 function latestModeState(entries: readonly unknown[]): boolean {
 	for (let index = entries.length - 1; index >= 0; index -= 1) {
 		const entry = entries[index];
@@ -197,198 +152,8 @@ function latestModeState(entries: readonly unknown[]): boolean {
 	return false;
 }
 
-function optionalSchema(schema: unknown): unknown {
-	if (
-		schema &&
-		(typeof schema === "object" || typeof schema === "function") &&
-		"optional" in schema &&
-		typeof schema.optional === "function"
-	) {
-		return schema.optional();
-	}
-	return schema;
-}
-
-function asToolUpdate(onUpdate: unknown, text: string): void {
-	if (typeof onUpdate !== "function") return;
-	onUpdate({ content: [{ type: "text", text }] });
-}
-
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function nonemptyResultText(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const text = value.trim();
-	return text === "" ? undefined : text;
-}
-
-function resultTextKey(text: string): string {
-	return text.replace(/\s+/g, " ");
-}
-
-const SAFE_SLICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-const RESULT_LINE_OR_CONTROL = /\r\n|[\n\r\u2028\u2029\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
-
-function frameResultLines(channel: "output" | "error" | "stderr", text: string): string {
-	const prefix = `  ${channel}: `;
-	const framed = text.replace(RESULT_LINE_OR_CONTROL, (character) => {
-		const code = character.charCodeAt(0);
-		if (code === 0x0a || code === 0x0d || code === 0x2028 || code === 0x2029) {
-			return `\n${prefix}`;
-		}
-		return `\\u${code.toString(16).padStart(4, "0")}`;
-	});
-	return prefix + framed;
-}
-
-/** One roster row's lifecycle, carrying only the detail its state can actually report. */
-type RosterState =
-	| { kind: "queued" }
-	| { kind: "started" }
-	| { kind: "progress"; detail?: string; requests?: string; tokens?: string }
-	| { kind: "completed"; exitCode: number | undefined };
-
-type RosterRow = {
-	id: string;
-	model: string;
-	state: RosterState;
-};
-
-const ROSTER_DETAIL_FIELDS = ["status", "lastIntent", "currentTool", "message"] as const;
-const MAX_ROSTER_DETAIL_LENGTH = 160;
-const MAX_ROSTER_COUNTER_LENGTH = 24;
-const ROSTER_CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
-
-/**
- * Flatten roster text to one readable line so a row never breaks the layout.
- * Length bounding belongs to the caller: child-reported detail is clamped,
- * configured model selectors are shown byte-for-byte however long they are.
- */
-function rosterText(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const text = value.replace(ROSTER_CONTROL_CHARACTER, " ").replace(/\s+/g, " ").trim();
-	return text === "" ? undefined : text;
-}
-
-function rosterCounter(value: unknown): string | undefined {
-	if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
-	const text = rosterText(value);
-	return text !== undefined && text.length <= MAX_ROSTER_COUNTER_LENGTH ? text : undefined;
-}
-
-function rosterStateFor(progress: AssignmentProgress): RosterState {
-	switch (progress.state) {
-		case "started":
-			return { kind: "started" };
-		case "progress": {
-			const source: SubprocessProgress = progress.progress ?? {};
-			const details: string[] = [];
-			for (const field of ROSTER_DETAIL_FIELDS) {
-				const text = rosterText(source[field]);
-				if (text !== undefined && !details.includes(text)) details.push(text);
-			}
-			const joined = details.join(" | ");
-			let detail: string | undefined = joined === "" ? undefined : joined;
-			if (detail !== undefined && detail.length > MAX_ROSTER_DETAIL_LENGTH) {
-				detail = `${detail.slice(0, MAX_ROSTER_DETAIL_LENGTH)}...`;
-			}
-			return {
-				kind: "progress",
-				detail,
-				requests: rosterCounter(source.requests),
-				tokens: rosterCounter(source.tokens),
-			};
-		}
-		case "completed":
-			return { kind: "completed", exitCode: progress.result?.exitCode };
-	}
-}
-
-/** Every update is a whole-roster snapshot: one row per assignment, newest state in place. */
-function rosterSnapshot(rows: readonly RosterRow[]): string {
-	let finished = 0;
-	let inFlight = 0;
-	const lines: string[] = [];
-	for (const row of rows) {
-		if (row.state.kind === "completed") finished += 1;
-		else if (row.state.kind !== "queued") inFlight += 1;
-		lines.push(renderRosterRow(row));
-	}
-	let headline = `P-Stack: ${finished}/${rows.length} assignment(s) finished, ${inFlight} in flight.`;
-	if (finished === 0 && inFlight === 0) headline = `Launching ${rows.length} P-Stack assignment(s)...`;
-	else if (finished === rows.length) headline = `P-Stack finished ${rows.length} assignment(s).`;
-	return [headline, ...lines].join("\n");
-}
-
-function renderRosterRow(row: RosterRow): string {
-	const head = `  ${row.id} [${row.model}]`;
-	switch (row.state.kind) {
-		case "queued":
-			return `${head} queued`;
-		case "started":
-			return `${head} started`;
-		case "progress": {
-			const counters: string[] = [];
-			if (row.state.requests !== undefined) counters.push(`requests ${row.state.requests}`);
-			if (row.state.tokens !== undefined) counters.push(`tokens ${row.state.tokens}`);
-			let line = `${head} progress`;
-			if (counters.length > 0) line += ` (${counters.join(", ")})`;
-			return row.state.detail === undefined ? line : `${line}: ${row.state.detail}`;
-		}
-		case "completed":
-			return `${head} completed exit ${row.state.exitCode ?? "?"}`;
-	}
-}
-
-function activeModelSelector(ctx: CommandContext): string | undefined {
-	const model = ctx.model ?? ctx.models?.current?.();
-	if (!model?.provider || !model.id) return undefined;
-	return `${model.provider}/${model.id}`;
-}
-
-/** Settings say whether a role is assigned; `ctx.models` resolves it the way core does. */
-function roleLookup(ctx: CommandContext, settings: SettingsApi | undefined): RoleLookup {
-	const models = ctx.models;
-	const session = ctx.model ?? models?.current?.();
-	return {
-		sessionModel: activeModelSelector(ctx),
-		sessionFamily: session && models?.family ? models.family(session) : undefined,
-		roleModel(role: PstackRoleId) {
-			if (settings?.getModelRole && settings.getModelRole(role) === undefined) return undefined;
-			const model = models?.resolve?.(`@${role}`);
-			if (!model) return undefined;
-			return { selector: `${model.provider}/${model.id}`, family: models?.family?.(model) ?? model.provider };
-		},
-	};
-}
-
-function roleSummaryLines(settings: SettingsApi | undefined): string[] {
-	const overrides = settings?.get?.("task.agentModelOverrides");
-	return PSTACK_ROLES.map((role) => {
-		const assigned = settings?.getModelRole?.(role.id);
-		let line = `${role.name} (${roleAlias(role)}): ${assigned ?? "not assigned, uses the session model"}`;
-		const override = overrides?.[role.agent];
-		const overrideText = Array.isArray(override) ? override.join(", ") : override;
-		if (typeof overrideText === "string" && overrideText.trim() !== "") {
-			line += `. /agents override for ${role.agent}: ${overrideText}`;
-		}
-		return line;
-	});
-}
-
-/** Show the P-Stack roles in `/model` → Roles before the user assigns them. */
-function registerRoleTags(settings: SettingsApi | undefined): void {
-	if (!settings?.get || !settings.override) return;
-	const tags = settings.get("modelTags") ?? {};
-	const missing = PSTACK_ROLES.filter((role) => !Object.hasOwn(tags, role.id));
-	if (missing.length === 0) return;
-	settings.override("modelTags", {
-		...tags,
-		...Object.fromEntries(missing.map((role) => [role.id, { name: role.name, color: role.color }])),
-	});
 }
 
 function hasVerificationSkill(cwd: string): boolean {
@@ -399,63 +164,8 @@ function hasVerificationSkill(cwd: string): boolean {
 	}
 }
 
-function childLifecyclePolicy(ctx: CommandContext): ChildLifecyclePolicy {
-	const artifactsDir = ctx.sessionManager.getArtifactsDir?.();
-	if (typeof artifactsDir === "string" && artifactsDir.length > 0) {
-		return { kind: "persisted", artifactsDir };
-	}
-	return { kind: "ephemeral" };
-}
-
-function parseAssignmentRequest(params: Record<string, unknown>): AssignmentRequest {
-	if (params.strategy === "panel") {
-		if (typeof params.prompt !== "string") throw new Error("panel strategy requires a prompt");
-		if (params.model !== undefined && typeof params.model !== "string") {
-			throw new Error("panel model must be a string");
-		}
-		let models: string[] | undefined;
-		if (params.models !== undefined) {
-			if (!Array.isArray(params.models) || !params.models.every((model) => typeof model === "string")) {
-				throw new Error("panel models must be an array of strings");
-			}
-			models = params.models;
-		}
-		return {
-			strategy: "panel",
-			prompt: params.prompt,
-			models,
-			model: params.model,
-		};
-	}
-
-	if (params.strategy !== "slice") throw new Error("pstack_task strategy must be 'panel' or 'slice'");
-	if (params.model !== undefined && typeof params.model !== "string") {
-		throw new Error("slice model must be a string");
-	}
-	if (!Array.isArray(params.slices)) throw new Error("slice strategy requires slices");
-	const slices = params.slices.map((slice, index) => {
-		if (!slice || typeof slice !== "object") throw new Error(`slice ${index} must be an object`);
-		if (!("id" in slice) || typeof slice.id !== "string" || slice.id === "") {
-			throw new Error(`slice ${index} requires an id`);
-		}
-		if (!SAFE_SLICE_ID.test(slice.id)) {
-			throw new Error(`slice ${index} id must be a safe token matching ${SAFE_SLICE_ID}`);
-		}
-		if (!("task" in slice) || typeof slice.task !== "string") {
-			throw new Error(`slice ${index} requires a task`);
-		}
-		let model: string | undefined;
-		if ("model" in slice && slice.model !== undefined) {
-			if (typeof slice.model !== "string") throw new Error(`slice ${index} model must be a string`);
-			model = slice.model;
-		}
-		return { id: slice.id, task: slice.task, model };
-	});
-	return { strategy: "slice", slices, model: params.model };
-}
-
 const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const MIN_OMP_VERSION = [17, 2, 13] as const;
+const MIN_OMP_VERSION = [18, 2, 11] as const;
 const MIN_OMP_VERSION_TEXT = MIN_OMP_VERSION.join(".");
 const SEMVER_PATTERN =
 	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -490,6 +200,39 @@ function assertSupportedOmpVersion(version: unknown): void {
 	);
 }
 
+type ResponsesItem = { type?: unknown; role?: unknown; [key: string]: unknown };
+
+function normalizeResponsesToolTurns(payload: unknown): unknown {
+	if (!payload || typeof payload !== "object" || !("input" in payload) || !Array.isArray(payload.input)) return undefined;
+	const items = payload.input as ResponsesItem[];
+	const result: ResponsesItem[] = [];
+	let index = 0;
+	while (index < items.length) {
+		const first = items[index]!;
+		if (first.type !== "function_call") {
+			result.push(first);
+			index += 1;
+			continue;
+		}
+		const hoisted: ResponsesItem[] = [];
+		const calls: ResponsesItem[] = [];
+		while (index < items.length) {
+			const item = items[index]!;
+			if (item.type === "function_call") calls.push(item);
+			else if (item.type === "reasoning" || (item.type === "message" && item.role === "assistant")) hoisted.push(item);
+			else break;
+			index += 1;
+		}
+		const outputs: ResponsesItem[] = [];
+		while (index < items.length && items[index]!.type === "function_call_output") {
+			outputs.push(items[index]!);
+			index += 1;
+		}
+		result.push(...hoisted, ...calls, ...outputs);
+	}
+	if (result.every((item, i) => item === items[i])) return undefined;
+	return { ...payload, input: result };
+}
 
 export function createPstackExtension(options: PstackExtensionOptions = {}): (pi: ExtensionApi) => void {
 	const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -498,12 +241,19 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		options.readFile ?? options.filesystem?.readFile ?? ((path) => readFileSync(path, "utf8"));
 	const removeFile: RemoveFileFn =
 		options.removeFile ?? options.filesystem?.removeFile ?? ((path) => rmSync(path));
+	const loadAgents = async (): Promise<AgentDefinition[]> => {
+		const dir = join(packageRoot, "agents");
+		const files = readdirSync(dir).filter((file) => file.endsWith(".md")).sort();
+		const agents = await Promise.all(files.map(async (file) => {
+			const { metadata } = parseSkillDocument(await readText(join(dir, file)));
+			if (metadata.name !== "poteto-agent" && !metadata.name?.startsWith("pstack-")) return undefined;
+			return parseAgentDefinition(metadata);
+		}));
+		return agents.filter((agent): agent is AgentDefinition => agent !== undefined);
+	};
 
 	return (pi: ExtensionApi): void => {
 		assertSupportedOmpVersion(pi.pi?.VERSION);
-		const scheduleAssignment = createLiveConcurrencyLimiter(
-			() => pi.pi?.settings?.get?.("task.maxConcurrency"),
-		);
 		let modeActive = false;
 		const projectModeStatus = (ctx: CommandContext): void => {
 			if (!modeActive) {
@@ -514,11 +264,8 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 			ctx.ui.setStatus(POTETO_STATUS_KEY, text);
 		};
 
-		const loadDocument = async (relativePath: string): Promise<SkillDocument> =>
-			parseSkillDocument(await readText(join(packageRoot, relativePath)));
-
-		const loadSkill = (name: string): Promise<SkillDocument> =>
-			loadDocument(join("skills", name, "SKILL.md"));
+		const loadSkill = async (name: string): Promise<SkillDocument> =>
+			parseSkillDocument(await readText(join(packageRoot, "skills", name, "SKILL.md")));
 
 		const sendPrompt = (prompt: string): void => {
 			if (pi.sendUserMessage) pi.sendUserMessage(prompt);
@@ -564,8 +311,7 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		});
 
 		const legacyRulePath = (): string => {
-			const agentDir =
-				typeof pi.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : join(homeDir, ".omp", "agent");
+			const agentDir = pi.pi?.getAgentDir?.() ?? join(homeDir, ".omp", "agent");
 			return join(agentDir, "rules", LEGACY_MODEL_RULE_BASENAME);
 		};
 
@@ -581,34 +327,43 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		};
 
 		pi.registerCommand("pstack-status", {
-			description: "Show sticky P-Stack mode status and model roles",
+			description: "Show sticky P-Stack mode status",
 			handler(_args, ctx) {
-				const lines = [`P-Stack mode is ${modeActive ? "ON" : "OFF"}.`, ...roleSummaryLines(pi.pi?.settings)];
-				ctx.ui.notify?.(lines.join("\n"), "info");
+				ctx.ui.notify?.(`P-Stack mode is ${modeActive ? "ON" : "OFF"}.\nUse /setup-pstack to see agent model assignments.`, "info");
 			},
 		});
 
 		pi.registerCommand("setup-pstack", {
-			description: "Show P-Stack model roles and where to change them",
+			description: "Show P-Stack agents and their model assignments",
 			async handler(_args, ctx) {
 				const rulePath = legacyRulePath();
 				if (
 					existsSync(rulePath) &&
 					(await ctx.ui.confirm(
 						"Delete legacy P-Stack model rule?",
-						`${rulePath} is no longer read. P-Stack models now come from /model roles. Delete it?`,
+						`${rulePath} is no longer read. Agent models now come from /agents. Delete it?`,
 					))
 				) {
 					await deleteLegacyRule(ctx, rulePath);
 				}
-				ctx.ui.notify?.(
-					[
-						"P-Stack model roles:",
-						...roleSummaryLines(pi.pi?.settings),
-						"Assign a role and its thinking level in /model -> Roles. Override one agent in /agents. The next spawn uses the change.",
-					].join("\n"),
-					"info",
-				);
+				try {
+					const agents = await loadAgents();
+					const overrides = pi.pi?.settings?.get?.("task.agentModelOverrides");
+					const disabled = new Set(pi.pi?.settings?.get?.("task.disabledAgents") ?? []);
+					ctx.ui.notify?.(
+						[
+							"P-Stack agents:",
+							...agents.map(({ name, description, model }) => {
+								const effective = overrides?.[name] ?? model;
+								return `${name}: ${Array.isArray(effective) ? effective.join(", ") : effective}${disabled.has(name) ? " (disabled)" : ""}. ${description}`;
+							}),
+							"Set each agent's model and thinking level in /agents. Defaults follow OMP's built-in roles (@task, @slow, @default).",
+						].join("\n"),
+						"info",
+					);
+				} catch (error) {
+					ctx.ui.notify?.(`Unable to load P-Stack agents: ${errorMessage(error)}`, "error");
+				}
 				if (
 					!hasVerificationSkill(ctx.cwd) &&
 					(await ctx.ui.confirm(
@@ -622,28 +377,29 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		});
 
 		pi.registerCommand("pstack-cleanup", {
-			description: "Reset P-Stack model roles, agent overrides, and the legacy rule",
+			description: "Clear P-Stack agent overrides, disabled agents, and the legacy rule",
 			async handler(_args, ctx) {
-				const settings = pi.pi?.settings;
 				const rulePath = legacyRulePath();
-				const aliases = PSTACK_ROLES.map(roleAlias).join(", ");
-				const agents = PSTACK_ROLES.map((role) => role.agent).join(", ");
+				const agents = await loadAgents();
+				const names = new Set(agents.map(({ name }) => name));
 				const confirmed = await ctx.ui.confirm(
-					"Reset P-Stack model routing?",
-					`Clear ${aliases} from modelRoles, clear /agents model overrides for ${agents}, and delete ${rulePath} if present?`,
+					"Reset P-Stack agent configuration?",
+					`Clear /agents model overrides and disabled entries for ${[...names].join(", ")}, and delete ${rulePath} if present?`,
 				);
 				if (!confirmed) return;
-				for (const role of PSTACK_ROLES) {
-					if (settings?.getModelRole?.(role.id) !== undefined) settings.setModelRole?.(role.id, undefined);
-				}
+				const settings = pi.pi?.settings;
 				const overrides = settings?.get?.("task.agentModelOverrides");
-				if (overrides && PSTACK_ROLES.some((role) => Object.hasOwn(overrides, role.agent))) {
+				if (overrides && [...names].some((name) => Object.hasOwn(overrides, name))) {
 					const remaining = { ...overrides };
-					for (const role of PSTACK_ROLES) delete remaining[role.agent];
+					for (const name of names) delete remaining[name];
 					settings?.set?.("task.agentModelOverrides", remaining);
 				}
+				const disabled = settings?.get?.("task.disabledAgents");
+				if (disabled?.some((name) => names.has(name))) {
+					settings?.set?.("task.disabledAgents", disabled.filter((name) => !names.has(name)));
+				}
 				await deleteLegacyRule(ctx, rulePath);
-				ctx.ui.notify?.("P-Stack model routing reset. Unassigned roles use the session model.", "info");
+				ctx.ui.notify?.("P-Stack agent configuration reset. Set models and thinking levels in /agents.", "info");
 			},
 		});
 
@@ -655,171 +411,48 @@ export function createPstackExtension(options: PstackExtensionOptions = {}): (pi
 		for (const event of ["session_start", "session_switch", "session_branch", "session_tree"]) {
 			pi.on(event, reconstructMode);
 		}
-		pi.on("session_start", () => {
+
+		pi.on("before_agent_start", async (event: { systemPrompt?: string | string[] }) => {
+			if (!modeActive) return undefined;
+			let reminder = DEFAULT_REMINDER;
 			try {
-				registerRoleTags(pi.pi?.settings);
-			} catch (error) {
-				console.warn(`omp-pstack: unable to register /model role names: ${errorMessage(error)}`);
+				const skill = await loadSkill("poteto-mode");
+				reminder = skill.metadata.reminder || reminder;
+			} catch {
+				reminder = DEFAULT_REMINDER;
 			}
+			const stickySegment = `<pstack-mode>${reminder}</pstack-mode>`;
+			const prior = event.systemPrompt;
+			return {
+				systemPrompt: Array.isArray(prior)
+					? [...prior, stickySegment]
+					: prior
+						? [prior, stickySegment]
+						: [stickySegment],
+			};
 		});
 
-		pi.on(
-			"before_agent_start",
-			async (event: { systemPrompt?: string | string[] }) => {
-				if (!modeActive) return undefined;
-				let reminder = DEFAULT_REMINDER;
-				try {
-					const skill = await loadSkill("poteto-mode");
-					reminder = skill.metadata.reminder || reminder;
-				} catch {
-					// The built-in reminder still preserves sticky mode if package content is unavailable.
-				}
-				const stickySegment = `<pstack-mode>${reminder}</pstack-mode>`;
-				const prior = event.systemPrompt;
-				return {
-					systemPrompt: Array.isArray(prior)
-						? [...prior, stickySegment]
-						: prior
-							? [prior, stickySegment]
-							: [stickySegment],
-				};
-			},
-		);
-
-		// A reasoning child narrating between parallel tool calls makes OMP emit
-		// assistant `message` items among the `function_call`s. Strict Responses
-		// relays (opencode-go's Console Go for deepseek) then reject the next
-		// request with `No tool output found for tool call <id>`. Re-grouping each
-		// tool turn before the request leaves the child on its native model.
 		pi.on("before_provider_request", (event: unknown) => {
 			if (!event || typeof event !== "object" || !("payload" in event)) return undefined;
 			return normalizeResponsesToolTurns(event.payload);
 		});
 
-		// Shipped agents name their role (`model: "@pstack-code"`). An unassigned
-		// custom role is not an alias OMP recognizes, so core would treat it as a
-		// literal selector; route that spawn to the session model instead.
 		pi.on("before_subagent_spawn", (event: SubagentSpawnEvent, ctx: CommandContext) => {
-			const role = event.agent === undefined ? undefined : roleForAgent(event.agent);
-			if (!role || event.patterns?.length !== 1 || event.patterns[0] !== roleAlias(role)) return undefined;
-			const sessionModel = activeModelSelector(ctx);
-			if (!sessionModel) return undefined;
-			return { model: sessionModel, note: `${role.name} role not assigned; using the session model` };
-		});
-
-		const z = pi.zod;
-		const stringSchema = z.string();
-		const sliceSchema = z.object({
-			id: stringSchema,
-			task: stringSchema,
-			model: optionalSchema(z.string()),
-		});
-		const parameters = z.object({
-			strategy: z.string(),
-			prompt: optionalSchema(z.string()),
-			models: optionalSchema(z.array(z.string())),
-			model: optionalSchema(z.string()),
-			slices: optionalSchema(z.array(sliceSchema)),
-		});
-
-		pi.registerTool({
-			name: "pstack_task",
-			label: "P-Stack Task",
-			description:
-				"Run a model panel or independent P-Stack slices concurrently. Model values: @pstack-judgment, @pstack-precise, @pstack-code (roles assigned in /model), cross-family (first assigned role whose family differs from the session model), inherit-parent, or an exact provider/model selector.",
-			parameters,
-			async execute(
-				toolCallId: string,
-				params: Record<string, unknown>,
-				signal: AbortSignal | undefined,
-				onUpdate: unknown,
-				ctx: CommandContext,
-			) {
-				if (signal?.aborted) {
-					return {
-						content: [{ type: "text", text: "P-Stack task cancelled before launch." }],
-						details: { strategy: params.strategy, assignments: [], results: [] },
-					};
-				}
-
-				const request = parseAssignmentRequest(params);
-				const lookup = roleLookup(ctx, pi.pi?.settings);
-				const assignments = expandAssignments(request, (model) => resolveSelection(model, lookup));
-				const runSubprocess = options.runSubprocess ?? pi.pi?.runSubprocess;
-				if (!runSubprocess) throw new Error("pstack_task requires pi.pi.runSubprocess or an injected runSubprocess");
-
-				let agentPrompt: string | undefined;
-				try {
-					agentPrompt = (await loadDocument(join("agents", "poteto-agent.md"))).body.trim();
-				} catch {
-					// Installed content may intentionally omit internal agent definitions.
-				}
-
-				const roster: RosterRow[] = assignments.map((assignment) => ({
-					id: assignment.id,
-					model: rosterText(assignment.modelLabel) ?? "inherit-parent",
-					state: { kind: "queued" },
-				}));
-				let publishedRoster: string | undefined;
-				const publishRoster = (): void => {
-					const snapshot = rosterSnapshot(roster);
-					if (snapshot === publishedRoster) return;
-					publishedRoster = snapshot;
-					asToolUpdate(onUpdate, snapshot);
-				};
-				publishRoster();
-				const results = await executeAssignments(assignments, {
-					runSubprocess,
-					cwd: ctx.cwd,
-					signal,
-					modelRegistry: ctx.modelRegistry ?? ctx.models?.registry,
-					settings: pi.pi?.settings,
-					agentPrompt,
-					schedule: scheduleAssignment,
-					parentToolCallId: toolCallId,
-					lifecycle: childLifecyclePolicy(ctx),
-					onProgress(progress) {
-						const row = roster[progress.index];
-						if (!row) return;
-						row.state = rosterStateFor(progress);
-						publishRoster();
-					},
-				});
-				// A child cancelled while still queued never reports progress, so its only
-				// terminal signal is the returned result; reconcile every row from those.
-				for (const [index, result] of results.entries()) {
-					const row = roster[index];
-					if (row) row.state = { kind: "completed", exitCode: result.exitCode };
-				}
-				publishRoster();
-				const text = results
-					.map((result, index) => {
-						const logicalId = assignments[index]?.id ?? result.id;
-						let rendered = `<<< begin pstack assignment >>>\n${logicalId}: exit ${result.exitCode}`;
-						const output = nonemptyResultText(result.output);
-						const outputKey = output === undefined ? undefined : resultTextKey(output);
-						if (output !== undefined) rendered += `\n${frameResultLines("output", output)}`;
-						if (result.exitCode === 0) return `${rendered}\n<<< end pstack assignment >>>`;
-
-						const error = nonemptyResultText(result.error);
-						const errorKey = error === undefined ? undefined : resultTextKey(error);
-						if (error !== undefined && errorKey !== outputKey) {
-							rendered += `\n${frameResultLines("error", error)}`;
-						}
-
-						const stderr = nonemptyResultText(result.stderr);
-						const stderrKey = stderr === undefined ? undefined : resultTextKey(stderr);
-						if (stderr !== undefined && stderrKey !== outputKey && stderrKey !== errorKey) {
-							rendered += `\n${frameResultLines("stderr", stderr)}`;
-						}
-						return `${rendered}\n<<< end pstack assignment >>>`;
-					})
-					.join("\n");
-				return {
-					content: [{ type: "text", text: text || "No P-Stack assignments were requested." }],
-					details: { strategy: request.strategy, assignments, results },
-				};
-			},
+			if (event.agent !== "pstack-cross-judge") return undefined;
+			const models = ctx.models;
+			const sessionModel = ctx.model ?? models?.current();
+			if (!models || !sessionModel) return undefined;
+			const family = models.family(sessionModel);
+			const firstDifferent = event.patterns.findIndex((pattern) => {
+				const model = models.resolve(pattern);
+				return model !== undefined && models.family(model) !== family;
+			});
+			if (firstDifferent <= 0) return undefined;
+			const selector = event.patterns[firstDifferent]!;
+			return {
+				model: [selector, ...event.patterns.slice(0, firstDifferent), ...event.patterns.slice(firstDifferent + 1)],
+				note: `pstack-cross-judge: preferring ${selector} from a different family than the session`,
+			};
 		});
 	};
 }

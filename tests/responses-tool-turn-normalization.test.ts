@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { createPstackExtension } from "../src/extension.ts";
-import { normalizeResponsesToolTurns } from "../src/pstack-task.ts";
 import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.ts";
 
 /**
@@ -13,6 +12,13 @@ import { createFakeRuntime, type FakeRuntime } from "./helpers/runtime-fake-api.
  */
 
 type Item = { type?: string; role?: string; call_id?: string };
+const runtime = createFakeRuntime();
+createPstackExtension()(runtime.api as never);
+const requestHandler = runtime.handlers.get("before_provider_request")?.[0];
+if (!requestHandler) throw new Error("Missing before_provider_request handler");
+function normalizeResponsesToolTurns(payload: unknown): unknown {
+	return requestHandler({ type: "before_provider_request", payload }, runtime.createContext());
+}
 
 const types = (input: unknown): Array<string | undefined> =>
 	(input as Item[]).map((item) => item.type);
