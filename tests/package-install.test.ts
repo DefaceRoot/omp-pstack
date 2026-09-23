@@ -228,17 +228,16 @@ test("package.json names an installable omp-pstack extension with pinned metadat
 	expect(presentLifecycleHooks).toEqual([]);
 });
 
-test("package.json peerDependencies requires @oh-my-pi/pi-coding-agent >=17.2.13", () => {
+test("package.json peerDependencies requires @oh-my-pi/pi-coding-agent >=18.2.11", () => {
 	const pkg = readPackageJson();
 	const peer = pkg.peerDependencies ?? {};
 	// Exact peer range: VERSION gate enforces the floor.
-	expect(peer["@oh-my-pi/pi-coding-agent"]).toBe(">=17.2.13");
+	expect(peer["@oh-my-pi/pi-coding-agent"]).toBe(">=18.2.11");
 });
 
 test('package.json peerDependenciesMeta["@oh-my-pi/pi-coding-agent"].optional === true', () => {
 	const pkg = readPackageJson();
 	const peerMeta = pkg.peerDependenciesMeta ?? {};
-	// Final RED follow-up #3 after e38bc0d (with mkdtemp profile fixture + 17.2.13-beta.1 reject):
 	// optional meta prevents Bun plugin install from auto-installing a duplicate coding-agent
 	// under ~/.omp/plugins.
 	expect(

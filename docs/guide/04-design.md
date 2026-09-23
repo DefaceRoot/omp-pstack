@@ -10,7 +10,7 @@ One attempt at a hard design locks in the first shape the model thought of. `/ar
 /architect design the import pipeline before writing any code. i care most about how callers use it.
 ```
 
-[`/architect`](../../skills/architect/SKILL.md) grounds itself first, running `/how` over the code the design touches and `/why` when it moves ownership or layers. Then it runs `/arena` to produce competing design sketches, with the caller's usage written first in each, followed by types, signatures, and a module map.
+[`/architect`](../../skills/architect/SKILL.md) grounds itself first, running `/how` over the code the design touches and `/why` when it moves ownership or layers. Then its three `pstack-architect-runner` slots produce competing design sketches, with the caller's usage written first in each, followed by types, signatures, and a module map. It uses arena's judging and synthesis flow.
 
 By default it proceeds straight from the synthesized design into implementation. If you want to see the design first, say so:
 
@@ -24,7 +24,7 @@ By default it proceeds straight from the synthesized design into implementation.
 /arena take my prompt to the arena verbatim. i want to compare their proposals with yours.
 ```
 
-[`/arena`](../../skills/arena/SKILL.md) is the general tool underneath. N subagents attempt the same design or code brief in parallel, each writing to its own worktree or directory. A read-only judge, on a different model family when your configuration allows one, scores every candidate against a rubric. The coordinator reads each candidate end to end, picks a base, grafts in the best ideas from the losers, and verifies the result.
+[`/arena`](../../skills/arena/SKILL.md) runs N attempts at the same design or code brief in parallel, each writing to its own worktree or directory. Its read-only `pstack-cross-judge` uses a model pool that prefers a family different from your session model. The judge scores every candidate against a rubric. The coordinator reads each candidate end to end, picks a base, grafts in the best ideas from the losers, and verifies the result.
 
 ```mermaid
 flowchart LR
@@ -40,7 +40,7 @@ flowchart LR
     H --> I[Verify]
 ```
 
-The default panel comes from the three P-Stack roles: `@pstack-judgment`, `@pstack-precise`, and `@pstack-code`. Set their models in `/model` → Roles and adjust the number of attempts per task. Ask for more candidates when the decision matters, fewer when it doesn't:
+The default panel has `pstack-arena-runner-1`, `pstack-arena-runner-2`, and `pstack-arena-runner-3`. Set their models in `/agents` and give the slots different families for diversity. Disable a slot there for fewer attempts. Ask for more candidates to reuse slots in order:
 
 ```text
 /arena this, 5 candidates. the cache key format is expensive to change later.
@@ -62,7 +62,7 @@ Reach for it when parallelism buys coverage or lets independent checks race. `/a
 /interrogate the whole branch, but skeptically. no nitpicks unless it's an actual bug or regression.
 ```
 
-[`/interrogate`](../../skills/interrogate/SKILL.md) sends the same diff, intent, and rubric to several reviewers on different model families. Model diversity is the point. Different models have different blind spots, so a finding two models raise independently is high-confidence signal. The lead sorts everything into `Act on`, `Consider`, `Noted`, and `Dismissed`, with a reason for each dismissal, and applies nothing automatically.
+[`/interrogate`](../../skills/interrogate/SKILL.md) sends the same diff, intent, and rubric to its enabled reviewer slots. Give those slots models from different families in `/agents` to vary their blind spots. A finding two reviewers raise independently is high-confidence signal. The lead sorts everything into `Act on`, `Consider`, `Noted`, and `Dismissed`, with a reason for each dismissal, and applies nothing automatically.
 
 Read the dismissals too. The lead is a pragmatic senior engineer, not an oracle, and you can override it.
 

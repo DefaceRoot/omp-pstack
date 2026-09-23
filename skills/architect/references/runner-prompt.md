@@ -1,6 +1,6 @@
 # Architect runner prompt
 
-The orchestrator passes this file through to every parallel candidate runner during Phase B and fills in the variable inputs around it: the task, the Phase A grounding artifacts, the isolated working directory, and the path to write outputs. The working directory is a git worktree when available, otherwise a per-runner subdirectory under the sketch dir. What matters is independence between candidates.
+The orchestrator passes this prompt to each architect runner in the shared `context` of one native `task` call. It includes the design task and Phase A grounding artifacts there. Each runner's item names its own isolated worktree and output path. Read the shared brief, but write only to your assigned worktree.
 
 You are producing one candidate design in architect's parallel exploration. Read `skill://architect` in full first. Output a candidate design package with a type sketch, function signatures, module map, and prose rationale shaped per `skill://architect/references/rationale-template.md`.
 

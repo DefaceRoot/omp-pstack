@@ -19,17 +19,17 @@ When in doubt, take the simple path.
 
 ## Step 2a. Explore (complex questions only)
 
-Split the question into 2 to 4 distinct exploration angles. Call native `task` once with a shared `context` containing the question, workspace, and read-only instructions. Give each angle a stable item `name`, `agent: "poteto-agent"`, and a complete reason-bearing `task` based on `skill://how/references/explorer-prompt.md`. Name the assigned angle and why it matters. Do not add a `model` field. The explorers must not write files.
+Split the question into 2 to 4 distinct exploration angles. Call native `task` once with a shared `context` containing the question, workspace, and read-only instructions. Give each angle a stable item `name`, `agent: "pstack-how-explorer"`, and a complete reason-bearing `task` based on `skill://how/references/explorer-prompt.md`. Name the assigned angle and why it matters. Do not add a `model` field. The explorers must not write files.
 
 Each explorer traces its own slice from entry point to effect, reads the implementation with `glob`, `grep`, and `read`, and returns components, flow, boundaries, files read, non-obvious behavior, and gaps. Overlap is fine. The explainer reconciles it. Go to Step 3.
 
 ## Step 2b. Direct explain (simple questions)
 
-Call native `task` once with an item named `Explain`, `agent: "poteto-judgment"`, and a complete reason-bearing `task` based on `skill://how/references/explainer-prompt.md`. Omit the explorer-findings section. Instruct the explainer to explore with `glob`, `grep`, and `read` before writing. The task forbids writes and has no `model` field. Go to Step 4.
+Call native `task` once with an item named `Explain`, `agent: "pstack-how-explainer"`, and a complete reason-bearing `task` based on `skill://how/references/explainer-prompt.md`. Omit the explorer-findings section. Instruct the explainer to explore with `glob`, `grep`, and `read` before writing. The task forbids writes and has no `model` field. Go to Step 4.
 
 ## Step 3. Synthesize (complex questions only)
 
-Once all explorers return, call native `task` once with an item named `Synthesize`, `agent: "poteto-judgment"`, and a complete reason-bearing `task` based on `skill://how/references/explainer-prompt.md`. Include every explorer's findings. The explainer resolves overlap and contradictions by checking the code and writes one explanation. The task forbids writes and has no `model` field.
+Once all explorers return, call native `task` once with an item named `Synthesize`, `agent: "pstack-how-explainer"`, and a complete reason-bearing `task` based on `skill://how/references/explainer-prompt.md`. Include every explorer's findings. The explainer resolves overlap and contradictions by checking the code and writes one explanation. The task forbids writes and has no `model` field.
 
 ## Step 4. Present
 

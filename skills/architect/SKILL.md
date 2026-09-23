@@ -28,9 +28,9 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 ## Phase B: Sketch
 
-Run `skill://arena` with the design-sketch task and the Phase A grounding artifacts. Pass `skill://architect/references/runner-prompt.md` as each runner's prompt. Each candidate produces a design package shaped per `skill://architect/references/rationale-template.md`.
+Use `skill://arena` for framing, cross-judging, picking, grafting, and verification. For this design panel, perform its Phase B here with architect's own runner slots rather than arena's runner slots.
 
-In Phase B, `skill://arena` makes one `pstack_task` call with `strategy: "panel"` and `models: ["@pstack-judgment", "@pstack-precise", "@pstack-code"]`. If the user asks for N candidates, repeat role aliases or use explicit selectors to provide N arms.
+Call native `task` once with the design-sketch task, Phase A grounding artifacts, and `skill://architect/references/runner-prompt.md` in shared `context`. Add one named item per enabled `pstack-architect-runner-1`, `pstack-architect-runner-2`, and `pstack-architect-runner-3` slot by default. Each item's `task` names its own isolated worktree and output path and requires a design package shaped per `skill://architect/references/rationale-template.md`. A disabled slot shrinks the panel. For a requested N, use N items, taking enabled slots in order and wrapping if needed. If no slots are enabled, ask the user to enable one. Set their models and thinking levels in `/agents`.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is `skill://principle-exhaust-the-design-space` made concrete. Whole-shape alternatives, not point fixes inside one shape.
 
@@ -38,7 +38,7 @@ Screen every candidate against `skill://architect/references/design-red-flags.md
 
 Compare viable candidates on interface depth. Prefer the design that hides more complexity behind a smaller, simpler public surface. A rich interface can keep call chains short by concentrating capability instead of scattering it across layers.
 
-Arena returns one synthesized design package. The synthesis decision populates the rationale's "Synthesis decision" section.
+Continue with arena's cross-judge, synthesis, grafting, and verification phases. The synthesis decision populates the rationale's "Synthesis decision" section.
 
 ## Phase C: Agree (opt-in)
 
@@ -76,7 +76,7 @@ When you scrap:
 1. Re-run `skill://how` over what's been built.
 2. Redesign as if the new constraints had been day-one assumptions, per redesign-from-first-principles.
 3. Subtract before adding, per `skill://principle-subtract-before-you-add`. The new sketch should be smaller than the old one before it grows.
-4. Return to Phase B and re-run arena.
+4. Return to Phase B and run the architect panel again.
 
 ## Outputs
 

@@ -1,7 +1,7 @@
 ---
 name: poteto-agent
-description: poteto-mode code delegate on the P-Stack Code role (`@pstack-code`). Use for code changes, swarm coverage workers, how explorers, why investigators, and ordinary helpers. Reads `skill://poteto-mode` in full before any work.
-model: "@pstack-code"
+description: "Default poteto-mode delegate for ordinary helpers and sub-coordinators. Resume an existing `poteto-agent` for the conversation rather than spawning a sibling. Reads `skill://poteto-mode` in full before any work."
+model: "@task"
 blocking: false
 spawns: "*"
 ---

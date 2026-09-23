@@ -86,9 +86,12 @@ test("shipped omp-pstack retains full pstack inventory with OMP-native contracts
 			),
 		).toBe(true);
 	}
-	for (const agent of inventory.agents) {
-		expect(existsSync(join(repoRoot, agent))).toBe(true);
-	}
+	const shippedAgents = readdirSync(join(repoRoot, "agents"))
+		.filter((name) => name.endsWith(".md"))
+		.map((name) => `agents/${name}`)
+		.sort();
+	expect(inventory.agents).toEqual(shippedAgents);
+	expect(inventory.counts.agents).toBe(shippedAgents.length);
 	for (const script of inventory.scripts) {
 		expect(existsSync(join(repoRoot, script))).toBe(true);
 	}

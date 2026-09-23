@@ -25,20 +25,18 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Start with `@pstack-judgment`, `@pstack-precise`, and `@pstack-code`. If the user asks for N candidates, pass N entries in `models`. Repeat role aliases or use explicit selectors for additional arms. Spawn more when the arena covers multiple design directions.
-4. Assign output paths. Each candidate writes to its own location, a git worktree where possible or `/tmp/arena-<slug>/candidate-<n>/`. Follow `skill://principle-separate-before-serializing-shared-state`.
+3. By default, pick one candidate per enabled `pstack-arena-runner-1`, `pstack-arena-runner-2`, and `pstack-arena-runner-3` slot. A slot disabled in `/agents` drops out, so the panel shrinks. For a requested N, use N items, taking enabled slots in order and wrapping if needed. If no slots are enabled, ask the user to enable one. Give slots different model families in `/agents` for diversity. For generation-bound work that needs the same model N times, set the slots to the same model.
+4. Assign each candidate its own isolated git worktree and output path. If git worktrees are unavailable, use separate `/tmp/arena-<slug>/candidate-<n>/` directories. Follow `skill://principle-separate-before-serializing-shared-state`.
 
 ## Phase B: Fan out
 
-Call `pstack_task` once with `strategy: "panel"`, the shared candidate brief in `prompt`, and `models: ["@pstack-judgment", "@pstack-precise", "@pstack-code"]` by default. For a requested N, pass the N selectors chosen in Phase A. The extension launches one parallel OMP agent per panel entry. The shared prompt names the grounding path. Each panel member derives its own `panel-N` output path and produces both the artifact and a short rationale.
-
-Each rationale names the alternatives the candidate considered and what it rejected.
+Call native `task` once with the same candidate brief and grounding path in shared `context`. Add one named item per selected runner slot. Each item sets `agent` to its `pstack-arena-runner-1`, `pstack-arena-runner-2`, or `pstack-arena-runner-3` slot and gives a complete `task` naming its own isolated worktree, output path, artifact, and short rationale. Reused slots get separate items and worktrees. Do not put a model on an item. Each rationale names the alternatives the candidate considered and what it rejected.
 
 If a candidate fails to produce output, proceed with N-1 and note the dropout in the synthesis record.
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, call `pstack_task` with `strategy: "slice"`, one slice `{ id: "cross-judge", task: <judge brief> }`, and `model: "cross-family"`. The judge sees the rubric and candidates by path label, scores every criterion, and recommends a base with rationale. Launch it while the parent reads in Phase D, never while candidates are still writing. Partial candidate output is not a dropout.
+After all Phase B candidates complete, call native `task` once with one item using `agent: "pstack-cross-judge"`. Give the judge the rubric and candidates under neutral path labels, without runner identities or model names. Require a read-only review that scores every criterion and recommends a base with rationale. The extension prefers a model from the judge's pool whose family differs from the session model. Launch the judge while the parent reads in Phase D, never while candidates are still writing. Partial candidate output is not a dropout.
 
 ## Phase D: Pick a base
 

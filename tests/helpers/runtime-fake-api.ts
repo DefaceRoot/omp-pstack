@@ -20,18 +20,7 @@ export type RegisteredCommand = {
 	handler: (args: string, ctx: FakeCommandContext) => void | Promise<void>;
 };
 
-export type RegisteredTool = {
-	name: string;
-	description?: string;
-	parameters?: unknown;
-	execute: (
-		toolCallId: string,
-		params: Record<string, unknown>,
-		signal: AbortSignal | undefined,
-		onUpdate: unknown,
-		ctx: FakeCommandContext,
-	) => unknown | Promise<unknown>;
-};
+export type RegisteredTool = { name: string };
 
 export type SentMessage = {
 	via: "sendMessage" | "sendUserMessage";
@@ -64,9 +53,7 @@ export type FakeCommandContext = {
 	sessionManager: {
 		getBranch: () => CustomSessionEntry[];
 		getEntries: () => CustomSessionEntry[];
-		getArtifactsDir: () => string | undefined;
 	};
-	hasPendingMessages: () => boolean;
 	/** Active session model, mirroring OMP ExtensionContext.model. */
 	model?: FakeModel;
 	/** Read-only model query facade, mirroring OMP ExtensionContext.models. */
@@ -76,15 +63,11 @@ export type FakeCommandContext = {
 		resolve: (spec: string) => FakeModel | undefined;
 		family: (model: FakeModel) => string;
 	};
-	modelRegistry?: unknown;
 };
 
 export type FakeSettingsLike = {
 	get: (key: string) => unknown;
 	set?: (key: string, value: unknown) => void;
-	override?: (key: string, value: unknown) => void;
-	getModelRole?: (role: string) => string | undefined;
-	setModelRole?: (role: string, value: string | undefined) => void;
 };
 
 export type FakeExtensionAPI = {
@@ -107,16 +90,8 @@ export type FakeExtensionAPI = {
 	appendEntry: (customType: string, data?: unknown) => void;
 	sendMessage: (message: unknown, options?: unknown) => void;
 	sendUserMessage: (content: unknown, options?: unknown) => void;
-	setLabel: (label: string) => void;
-	zod: { object: (...args: unknown[]) => unknown; string: () => unknown; array: (...args: unknown[]) => unknown };
-	/**
-	 * Injected pi-coding-agent module exports (`ExtensionAPI.pi`).
-	 * OMP 17.2.13 exports active-path `getAgentDir` from the package index;
-	 * extensions read it as `pi.pi.getAgentDir()`.
-	 */
 	pi?: {
 		settings?: FakeSettingsLike;
-		runSubprocess?: unknown;
 		getAgentDir?: () => string;
 		/** Coding-agent package VERSION export (`pi.pi.VERSION`). */
 		VERSION?: string;
@@ -133,16 +108,11 @@ export type FakeRuntimeOptions = {
 	settings?: FakeSettingsLike;
 	/** Active profile agent dir exposed at `api.pi.getAgentDir()`. */
 	getAgentDir?: () => string;
-	/**
-	 * Host coding-agent VERSION exposed at `api.pi.VERSION`.
-	 * Defaults to 17.2.13 so green-gated init does not break unrelated runtime tests.
-	 */
+	/** Host coding-agent VERSION exposed at `api.pi.VERSION`. */
 	version?: string | undefined;
 	symbolPreset?: SymbolPreset;
 	editorText?: string;
-	artifactsDir?: string;
-	/** Models that `ctx.models.resolve("@<role>")` returns, keyed by role id. */
-	roleModels?: Record<string, FakeModel>;
+	availableModels?: FakeModel[];
 };
 
 export type FakeRuntime = {
@@ -192,13 +162,11 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 	let parentModel = options.parentModel;
 	let settings = options.settings;
 	let getAgentDir = options.getAgentDir;
-	// Default to the minimum supported OMP host so unrelated tests survive the VERSION gate.
-	let version: string | undefined = Object.hasOwn(options, "version") ? options.version : "17.2.13";
+	let version: string | undefined = Object.hasOwn(options, "version") ? options.version : "18.2.11";
 	let symbolPreset: SymbolPreset = options.symbolPreset ?? "unicode";
 	let editorText = options.editorText ?? "";
 	const cwd = options.cwd ?? process.cwd();
-	const artifactsDir = options.artifactsDir;
-	const roleModels = options.roleModels ?? {};
+	const availableModels = options.availableModels;
 
 	const createContext = (): FakeCommandContext => ({
 		ui: {
@@ -232,22 +200,19 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		sessionManager: {
 			getBranch: () => [...entries],
 			getEntries: () => [...entries],
-			getArtifactsDir: () => artifactsDir,
 		},
-		hasPendingMessages: () => false,
 		model: parentModel,
 		models: {
-			list: () => (parentModel ? [parentModel] : []),
+			list: () => availableModels ?? (parentModel ? [parentModel] : []),
 			current: () => parentModel,
 			resolve: (spec) => {
-				if (spec.startsWith("@")) return roleModels[spec.slice(1)];
-				if (!parentModel) return undefined;
-				const selector = `${parentModel.provider}/${parentModel.id}`;
-				return spec === selector || spec === parentModel.id ? parentModel : undefined;
+				const selector = spec.replace(/:(?:off|minimal|low|medium|high|xhigh|max)$/, "");
+				return (availableModels ?? (parentModel ? [parentModel] : [])).find((model) =>
+					selector === `${model.provider}/${model.id}` || selector === model.id
+				);
 			},
 			family: (model) => model.provider.toLowerCase(),
 		},
-		modelRegistry: {},
 	});
 
 	const api: FakeExtensionAPI = {
@@ -274,12 +239,6 @@ export function createFakeRuntime(options: FakeRuntimeOptions = {}): FakeRuntime
 		},
 		sendUserMessage(content, messageOptions) {
 			sentMessages.push({ via: "sendUserMessage", payload: content, options: messageOptions });
-		},
-		setLabel() {},
-		zod: {
-			object: () => ({}),
-			string: () => ({}),
-			array: () => ({}),
 		},
 		pi: {
 			get settings() {
