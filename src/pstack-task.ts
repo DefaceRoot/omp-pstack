@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-
-export type ModelSelection = string | undefined;
+import type { ResolvedSelection } from "./model-roles.ts";
 
 export type Assignment = {
 	id: string;
 	task: string;
 	modelOverride?: string;
+	modelRole?: string;
+	modelLabel: string;
 };
 
 export type PanelRequest = {
@@ -48,6 +49,7 @@ type RunSubprocessBaseOptions = {
 	description: string;
 	cwd: string;
 	modelOverride?: string;
+	modelRole?: string;
 	parentToolCallId?: string;
 	signal?: AbortSignal;
 	onProgress?: (progress: SubprocessProgress) => void;
@@ -192,36 +194,20 @@ export function createLiveConcurrencyLimiter(readMaxConcurrency: () => unknown):
 		});
 }
 
-/** Map P-Stack's inheritance sentinels to the active parent model selector. */
-export function resolveModelOverride(
-	model: ModelSelection,
-	parentModelOverride?: string,
-): string | undefined {
-	if (model === undefined) return undefined;
-	const normalized = model.trim();
-	if (normalized === "" || normalized === "auto" || normalized === "inherit-parent") return parentModelOverride;
-	return normalized;
-}
-
 /** Expand a panel or a set of independent slices into the one internal assignment form. */
 export function expandAssignments(
 	request: AssignmentRequest,
-	parentModelOverride?: string,
+	resolveModel: (model: string | undefined) => ResolvedSelection,
 ): Assignment[] {
+	const assign = (id: string, task: string, model: string | undefined): Assignment => {
+		const { modelOverride, modelRole, label } = resolveModel(model);
+		return { id, task, modelOverride, modelRole, modelLabel: label };
+	};
 	if (request.strategy === "panel") {
 		const models = request.models ?? [request.model];
-		return models.map((model, index) => ({
-			id: `panel-${index}`,
-			task: request.prompt,
-			modelOverride: resolveModelOverride(model, parentModelOverride),
-		}));
+		return models.map((model, index) => assign(`panel-${index}`, request.prompt, model));
 	}
-
-	return request.slices.map((slice) => ({
-		id: slice.id,
-		task: slice.task,
-		modelOverride: resolveModelOverride(slice.model ?? request.model, parentModelOverride),
-	}));
+	return request.slices.map((slice) => assign(slice.id, slice.task, slice.model ?? request.model));
 }
 
 function cancelledResult(id: string): AssignmentResult {
@@ -293,6 +279,7 @@ export async function executeAssignments(
 				description: assignment.id,
 				cwd: options.cwd,
 				modelOverride: assignment.modelOverride,
+				modelRole: assignment.modelRole,
 				parentToolCallId: options.parentToolCallId,
 				...lifecycle,
 				signal: options.signal,

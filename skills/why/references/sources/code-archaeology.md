@@ -49,18 +49,11 @@ gh pr view <number> --json title,body,author,createdAt,mergedAt,labels,closingIs
 # The --json reviews and comments fields are where the real signal is
 ```
 
-Look for out-of-band docs:
+Look for out-of-band docs with `glob` and `grep`:
 
-```bash
-# ADRs often live in docs/adr/ or similar
-rg -l -i 'architecture.decision' --glob '*.md'
-
-# TODOs and FIXMEs near the target
-rg -n -C2 '(TODO|FIXME|HACK|XXX|NOTE)' <target_file>
-
-# Related tests. Names often encode the "why"
-rg -l '<symbol>' --glob '*test*'
-```
+- `glob` likely ADR directories and Markdown files, then `grep` for architecture decisions.
+- `grep` the target file for `TODO|FIXME|HACK|XXX|NOTE` and read the nearby lines.
+- `glob` related test files, then `grep` for the target symbol to find the tests that cover it.
 
 ## What good evidence looks like here
 

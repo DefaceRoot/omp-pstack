@@ -1,6 +1,6 @@
 # Make it yours
 
-poteto-mode is one person's style. The machinery underneath, playbooks, routing, model roles, works just as well wearing yours. This page covers generating a personal mode, capturing lessons from a session, authoring a focused skill, and testing a skill change before you trust it.
+`/poteto-mode` reflects one person's style. The playbooks, routing, and model roles can support yours too. This page covers generating a personal mode, capturing lessons from a session, authoring a focused skill, and testing a skill change before you trust it. Configure the model roles in `/model` → Roles, with agent overrides in `/agents`.
 
 ## Generate your own mode with `/automate-me`
 

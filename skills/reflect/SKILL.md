@@ -10,13 +10,7 @@ Mine the current conversation for durable learnings, then route them into skill 
 
 ## When to invoke
 
-- The user said "reflect" or "/reflect".
-- A complex task (5+ tool calls) just landed cleanly and the recipe is worth keeping.
-- The agent hit dead ends, found the working path, and the path generalizes.
-- The user corrected the agent's approach mid-task.
-- A non-trivial workflow emerged that isn't captured anywhere.
-
-Skip when the conversation is trivial, off-topic, or already covered by an existing skill the parent followed correctly. One-offs are not learnings.
+Invoke when the user says "reflect" or "/reflect". Skip when the conversation is trivial, off-topic, or already covered by an existing skill the parent followed correctly. One-offs are not learnings.
 
 ## Process
 
@@ -24,10 +18,11 @@ Skip when the conversation is trivial, off-topic, or already covered by an exist
 
 Prefer the current OMP session path, an explicit transcript path, or a supplied `history://` or `agent://` reference. Only when none resolves, run `omp config path`, trim its non-empty output as `agent_dir`, and `glob` `<agent_dir>/sessions` recursively for recent `*.jsonl` candidates. Resolve the profile before searching: if `OMP_PROFILE` is defined, use it even when explicitly empty; only when it is undefined may `PI_PROFILE` supply the value. Trim the selected value. Normalize unset, trimmed-empty, or literal `default` to the default profile; never treat `default` as named or probe `/profiles/default`. A named profile must satisfy OMP's contract: lowercase, 1-64 characters matching `[a-z0-9][a-z0-9._-]{0,63}`, not ending in `.`, and not a reserved device basename (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, or `LPT0`-`LPT9`, including those followed by an extension). Only when `XDG_DATA_HOME` is explicitly set and the applicable omp data root exists, additionally search `$XDG_DATA_HOME/omp/sessions` for the normalized default profile or `$XDG_DATA_HOME/omp/profiles/<profile>/sessions` for a named profile. Do not invent a data-root fallback when `XDG_DATA_HOME` is unset. Named-profile discovery never reads default-profile sessions. Order candidates by modification time and `read` each first JSONL line. Select the newest session header whose `cwd` equals the active workspace. Never cross that boundary without explicit user permission. `read` the full selected transcript. Do not analyze from the conversation context alone.
 The additional XDG sessions root is eligible only on `linux` or `darwin`, and only when the active `agent_dir` equals the profile-derived default (`isDefault`). With a custom `PI_CODING_AGENT_DIR`, scan only `<custom-agent_dir>/sessions` and skip XDG even if `$XDG_DATA_HOME/omp` exists. On Windows (`win32`), ignore XDG.
+If no transcript reference or path resolves, write a tight digest of the current session and pass it to each reviewer instead. Never search another workspace's transcripts without the user's permission.
 
 ### 2. Spawn three reviewers in parallel
 
-Call native `task` once with a shared `context` and three items with stable names: `judgment`, `tooling`, and `divergent`. Set `agent: "poteto-agent"` on every item. Give each item a complete reason-bearing `task` from its prompt template. Do not add a `model` field. Prompts forbid writes while allowing configured MCP tools for citation checks. The parent applies edits.
+Call native `task` once with shared `context` and three stable items: `judgment` and `divergent` use `agent: "poteto-judgment"`, while `tooling` uses `agent: "poteto-precise"`. Build each complete reason-bearing `task` from its prompt template. Do not add a `model` field. Prompts forbid writes but allow configured MCP tools for citation checks. The parent applies edits.
 
 | Lens | Prompt template |
 |---|---|
@@ -39,17 +34,17 @@ Pass each template verbatim, substituting the transcript path or digest where ma
 
 ### 3. Synthesize
 
-Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "poteto-agent"` and give it a complete reason-bearing `task` based on `skill://reflect/references/synthesizer.md`. Do not add a `model` field. Insert every reviewer's full output where marked. The task forbids writes but allows configured MCP tools for citation spot-checks. The synthesizer returns a structured Accepted, Rejected, and Backlog list.
+Call native `task` once with a one-item batch named `Synthesize`. Set `agent: "poteto-judgment"` and give it a complete reason-bearing `task` based on `skill://reflect/references/synthesizer.md`. Insert every reviewer's full output where marked. Do not add a `model` field. The task forbids writes but allows configured MCP tools for citation spot-checks. The synthesizer returns a structured Accepted, Rejected, and Backlog list.
 
 ### 4. Structural enforcement check
 
-Sanity-check the synthesizer's Accepted list. For any item that would be enforced more reliably by a lint rule, script, metadata flag, or runtime check, move it from Accepted to Backlog. The synthesizer already applies this criterion; this is a final pass before edits land. See `skill://principle-encode-lessons-in-structure`.
+Sanity-check the synthesizer's Accepted list. For any item that would be enforced more reliably by a lint rule, script, metadata flag, or runtime check, move it from Accepted to Backlog. The synthesizer already applies this criterion. This is a final pass before edits land. See `skill://principle-encode-lessons-in-structure`.
 
 ### 5. Apply
 
-Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes affect every future agent in the org; do not auto-apply.
+Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes affect every future agent in the org. Do not auto-apply.
 
-Backlog items file to whatever devex / backlog tracker your team uses automatically. Those are tracker submissions, not skill edits. Only the Accepted list waits for approval.
+Backlog items file to whatever devex / backlog tracker your team uses automatically. Only the Accepted list waits for approval.
 
 For each approved Accepted item, follow the Routing field exactly:
 

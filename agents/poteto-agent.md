@@ -1,6 +1,7 @@
 ---
 name: poteto-agent
-description: routing target for `/poteto-mode` and requests for poteto's style; reads `skill://poteto-mode` in full before any work so delegated OMP tasks keep the same workflow.
+description: poteto-mode code delegate on the P-Stack Code role (`@pstack-code`). Use for code changes, swarm coverage workers, how explorers, why investigators, and ordinary helpers. Reads `skill://poteto-mode` in full before any work.
+model: "@pstack-code"
 blocking: false
 spawns: "*"
 ---

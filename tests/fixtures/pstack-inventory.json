@@ -5,10 +5,10 @@
     "pin": "6f7e183aa9f48805c38746705fe6a17d42cafb94"
   },
   "counts": {
-    "skillDirectories": 44,
-    "principles": 21,
+    "skillDirectories": 45,
+    "principles": 23,
     "playbooks": 23,
-    "agents": 2
+    "agents": 4
   },
   "skillDirectories": [
     "architect",
@@ -23,6 +23,7 @@
     "maintain-verification-skill",
     "no-comments",
     "poteto-mode",
+    "principle-attack-the-premise",
     "principle-boundary-discipline",
     "principle-build-the-lever",
     "principle-encode-lessons-in-structure",
@@ -43,10 +44,10 @@
     "principle-separate-before-serializing-shared-state",
     "principle-sequence-verifiable-units",
     "principle-subtract-before-you-add",
+    "principle-test-behavior-not-implementation",
     "principle-type-system-discipline",
     "recall",
     "reflect",
-    "setup-pstack",
     "show-me-your-work",
     "swarm",
     "tdd",
@@ -57,6 +58,7 @@
     "why"
   ],
   "principles": [
+    "principle-attack-the-premise",
     "principle-boundary-discipline",
     "principle-build-the-lever",
     "principle-encode-lessons-in-structure",
@@ -77,6 +79,7 @@
     "principle-separate-before-serializing-shared-state",
     "principle-sequence-verifiable-units",
     "principle-subtract-before-you-add",
+    "principle-test-behavior-not-implementation",
     "principle-type-system-discipline"
   ],
   "playbooks": [
@@ -106,38 +109,27 @@
   ],
   "agents": [
     "agents/comment-sicko.md",
-    "agents/poteto-agent.md"
+    "agents/poteto-agent.md",
+    "agents/poteto-judgment.md",
+    "agents/poteto-precise.md"
   ],
   "scripts": [
     "skills/poteto-mode/scripts/bootstrap.ts",
-    "skills/poteto-mode/scripts/worktree-audit.sh",
-    "skills/poteto-mode/scripts/package.json",
     "skills/poteto-mode/scripts/bun.lock",
+    "skills/poteto-mode/scripts/check-plan.mjs",
     "skills/poteto-mode/scripts/orch/orch.ts",
     "skills/poteto-mode/scripts/orch/store.ts",
-    "skills/poteto-mode/scripts/watch-pr/watch-pr",
+    "skills/poteto-mode/scripts/package.json",
     "skills/poteto-mode/scripts/watch-pr/cli.ts",
     "skills/poteto-mode/scripts/watch-pr/github.ts",
     "skills/poteto-mode/scripts/watch-pr/policy.ts",
     "skills/poteto-mode/scripts/watch-pr/render.ts",
     "skills/poteto-mode/scripts/watch-pr/types.ts",
+    "skills/poteto-mode/scripts/watch-pr/watch-pr",
+    "skills/poteto-mode/scripts/worktree-audit.sh",
     "skills/show-me-your-work/scripts/log.sh"
   ],
   "showMeYourWorkLogHelper": "skills/show-me-your-work/scripts/log.sh",
-  "benny": [
-    "automations/benny/FOR_AGENTS.md",
-    "automations/benny/README.md",
-    "automations/benny/skills/reproduce-and-fix-issues/SKILL.md",
-    "automations/benny/skills/reproduce-and-fix-issues/references/control-adapter.md",
-    "automations/benny/skills/reproduce-and-fix-issues/references/feature-map.example.md",
-    "automations/benny/skills/reproduce-and-fix-issues/references/verify-existing-fix.md",
-    "automations/benny/skills/setup-benny/SKILL.md",
-    "automations/benny/skills/triage-issue-reports/SKILL.md",
-    "automations/benny/skills/triage-issue-reports/references/routing.example.md",
-    "automations/benny/templates/configuration.example.yaml",
-    "automations/benny/templates/reproduce-automation-prompt.md",
-    "automations/benny/templates/triage-automation-prompt.md"
-  ],
   "guide": [
     "docs/guide/01-setup.md",
     "docs/guide/02-poteto-mode.md",
@@ -155,18 +147,8 @@
     "LICENSE",
     "agents/comment-sicko.md",
     "agents/poteto-agent.md",
-    "automations/benny/FOR_AGENTS.md",
-    "automations/benny/README.md",
-    "automations/benny/skills/reproduce-and-fix-issues/SKILL.md",
-    "automations/benny/skills/reproduce-and-fix-issues/references/control-adapter.md",
-    "automations/benny/skills/reproduce-and-fix-issues/references/feature-map.example.md",
-    "automations/benny/skills/reproduce-and-fix-issues/references/verify-existing-fix.md",
-    "automations/benny/skills/setup-benny/SKILL.md",
-    "automations/benny/skills/triage-issue-reports/SKILL.md",
-    "automations/benny/skills/triage-issue-reports/references/routing.example.md",
-    "automations/benny/templates/configuration.example.yaml",
-    "automations/benny/templates/reproduce-automation-prompt.md",
-    "automations/benny/templates/triage-automation-prompt.md",
+    "agents/poteto-judgment.md",
+    "agents/poteto-precise.md",
     "docs/guide/01-setup.md",
     "docs/guide/02-poteto-mode.md",
     "docs/guide/03-understand.md",
@@ -192,8 +174,6 @@
     "skills/create-verification-skill/references/feature-map-example/search.md",
     "skills/figure-it-out/SKILL.md",
     "skills/how/SKILL.md",
-    "skills/how/references/critic-prompt.md",
-    "skills/how/references/critique-rubric.md",
     "skills/how/references/explainer-prompt.md",
     "skills/how/references/explorer-prompt.md",
     "skills/interrogate/SKILL.md",
@@ -228,9 +208,9 @@
     "skills/poteto-mode/playbooks/visual-parity.md",
     "skills/poteto-mode/playbooks/worktree-cleanup.md",
     "skills/poteto-mode/references/bugbot-triage.md",
-    "skills/poteto-mode/references/plan.md",
     "skills/poteto-mode/scripts/bootstrap.ts",
     "skills/poteto-mode/scripts/bun.lock",
+    "skills/poteto-mode/scripts/check-plan.mjs",
     "skills/poteto-mode/scripts/orch/orch.test.ts",
     "skills/poteto-mode/scripts/orch/orch.ts",
     "skills/poteto-mode/scripts/orch/store.ts",
@@ -248,6 +228,7 @@
     "skills/poteto-mode/scripts/watch-pr/types.ts",
     "skills/poteto-mode/scripts/watch-pr/watch-pr",
     "skills/poteto-mode/scripts/worktree-audit.sh",
+    "skills/principle-attack-the-premise/SKILL.md",
     "skills/principle-boundary-discipline/SKILL.md",
     "skills/principle-build-the-lever/SKILL.md",
     "skills/principle-encode-lessons-in-structure/SKILL.md",
@@ -268,6 +249,7 @@
     "skills/principle-separate-before-serializing-shared-state/SKILL.md",
     "skills/principle-sequence-verifiable-units/SKILL.md",
     "skills/principle-subtract-before-you-add/SKILL.md",
+    "skills/principle-test-behavior-not-implementation/SKILL.md",
     "skills/principle-type-system-discipline/SKILL.md",
     "skills/recall/SKILL.md",
     "skills/reflect/SKILL.md",
@@ -275,7 +257,6 @@
     "skills/reflect/references/judgment-reviewer.md",
     "skills/reflect/references/synthesizer.md",
     "skills/reflect/references/tooling-reviewer.md",
-    "skills/setup-pstack/SKILL.md",
     "skills/show-me-your-work/SKILL.md",
     "skills/show-me-your-work/references/decision-log-template.tsv",
     "skills/show-me-your-work/scripts/log.sh",
@@ -332,7 +313,6 @@
   "operationalTrees": [
     "skills",
     "agents",
-    "automations/benny",
     "docs/guide"
   ]
 }
