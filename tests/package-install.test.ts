@@ -18,6 +18,8 @@ const README_PATH = join(ROOT, "README.md");
 
 const PACKAGE_NAME = "@defaceroot/omp-pstack";
 const EXTENSION_ENTRY = "./src/extension.ts";
+const UPSTREAM_VERSION = "0.15.3";
+const UPSTREAM_COMMIT = "b42effe0aa50f59c693d7e2924714e015e00bf7c";
 
 const REQUIRED_PUBLISH_PATHS = [
 	"src",
@@ -196,9 +198,11 @@ test("package.json names an installable omp-pstack extension with pinned metadat
 	const pkg = readPackageJson();
 
 	expect(pkg.name).toBe(PACKAGE_NAME);
-	expect(typeof pkg.version).toBe("string");
+	expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
 	expect(pkg.private).toBe(false);
 	expect(pkg.omp?.extensions).toEqual([EXTENSION_ENTRY]);
+	expect(pkg.pstackPort?.upstreamVersion).toBe(UPSTREAM_VERSION);
+	expect(pkg.pstackPort?.upstreamCommit).toBe(UPSTREAM_COMMIT);
 
 	const extensionPath = join(ROOT, normalizeFilesEntry(EXTENSION_ENTRY));
 	expect(existsSync(extensionPath)).toBe(true);

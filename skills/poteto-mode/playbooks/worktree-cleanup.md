@@ -11,4 +11,4 @@
 
 This playbook deletes only the confirmed worktrees, simulators, build products, and package caches covered by the gates above. User application state is outside its scope.
 
-**Reply:** `df -h /` before and after with space reclaimed, the worktrees pruned, and a one-line reason for each held back (in-use by which chat, or uncommitted work).
+**Reply:** `df -h /` before and after with space reclaimed, the worktrees pruned, and a one-line reason for each held back (in-use by which session, or uncommitted work).

@@ -4,7 +4,7 @@
 
 P-Stack makes parallel work less reckless. Its playbooks demand evidence from each agent, so independent work can run at once without trusting a green build as proof. Different models bring different strengths, and OMP lets you assign models by role rather than pinning them in skill text. Fork it, improve it, make it yours.
 
-`@defaceroot/omp-pstack` is a native [Oh My Pi](https://github.com/can1357/oh-my-pi) extension package. It ports P-Stack's skills, playbooks, and agents to OMP, retains the automation pack as an archive, and bundles three selected cursor-team-kit skills: `deslop`, `control-cli`, and `control-ui`. It uses OMP's extension, command, skill, agent, and subprocess APIs. It does not install a Cursor compatibility layer or run a package lifecycle script that writes outside the installed package.
+`@defaceroot/omp-pstack` is a native [Oh My Pi](https://github.com/can1357/oh-my-pi) extension package. It ports P-Stack's skills, playbooks, and agents to OMP and bundles three selected cursor-team-kit skills: `deslop`, `control-cli`, and `control-ui`. It uses OMP's extension, command, skill, agent, and subprocess APIs. It does not install a Cursor compatibility layer or run a package lifecycle script that writes outside the installed package.
 
 ## Install
 
@@ -200,13 +200,13 @@ Open `/agents` to set each P-Stack agent's model and thinking level. Defaults fo
 
 The arena, architect, and interrogate panels have three slots each. Disable a slot in `/agents` to shrink its panel. Set slots to models from different families for diverse attempts. For more members than enabled slots, the skill reuses slots in order. `pstack-cross-judge` uses an ordered model pool. The extension prefers an entry from a different family than the spawning session's model.
 
-`/setup-pstack` lists every P-Stack agent with its effective model and offers to remove a legacy rule file from older installs. It also offers `/create-verification-skill` if the project has no `.omp/skills/verify-*` skill. `/pstack-status` shows whether the session mode is ON or OFF and summarizes the effective agent models.
+`/setup-pstack` lists every P-Stack agent with its effective model and offers to remove a legacy rule file from older installs. It also offers `/create-verification-skill` if the project has no `.omp/skills/verify-*` skill. `/pstack-status` reports whether the session mode is ON or OFF and points to `/setup-pstack` for agent models.
 
 Use native `task` for panels and independent slices. Call it once per fan-out with shared `context` and named items. Each item names a roster agent and has a complete `task`. Model choices come from `/agents`, not the task item. Idle children park automatically. Use `hub` to inspect and revive them.
 
 ### Enable the workflow mode
 
-Run `/poteto-mode` to enable P-Stack workflow guidance for this session. Use `/pstack-status` to inspect the mode and agent models. `/pstack-off` turns the mode off. Ctrl+Alt+O places the visible `/poteto-mode ` prefix in the editor so you can type a goal and submit. While active, the status bar shows the Poteto indicator, or `[P] poteto` with the ASCII symbol preset.
+Run `/poteto-mode` to enable P-Stack workflow guidance for this session. Use `/pstack-status` to inspect the mode. Use `/setup-pstack` to inspect agent models. `/pstack-off` turns the mode off. Ctrl+Alt+O places the visible `/poteto-mode ` prefix in the editor so you can type a goal and submit. While active, the status bar shows the Poteto indicator, or `[P] poteto` with the ASCII symbol preset.
 
 Ctrl+Alt+P remains Plannotator's plan-mode shortcut. Ctrl+Shift+P is OMP's built-in reverse model cycle and cannot be overridden by this plugin. OMP's public extension API does not expose native editor or status-frame colors, so the extension cannot add a yellow native border.
 

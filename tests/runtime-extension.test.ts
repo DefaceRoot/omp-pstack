@@ -367,8 +367,7 @@ describe("omp-pstack runtime extension", () => {
 		expect(summary).toContain("pstack-cross-judge: anthropic/opus:high, openai/gpt-y:low");
 		expect(summary).toContain("poteto-agent: @task");
 		expect(summary).toContain("Blind cross-family judge");
-		expect(summary).toContain("models");
-		expect(summary).toContain("/agents");
+		expect(summary).toContain("Set each agent's model and thinking level in /agents. Defaults follow OMP's built-in roles (@task, @slow, @default).");
 		const names = readdirSync(join(packageRoot, "agents"))
 			.map((file) => file.replace(/\.md$/, ""))
 			.filter((name) => name === "poteto-agent" || name.startsWith("pstack-"));

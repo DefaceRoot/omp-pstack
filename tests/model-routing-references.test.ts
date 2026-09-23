@@ -27,7 +27,7 @@ const guidance = [
 	...markdownFiles(join(ROOT, "docs")),
 	...markdownFiles(join(ROOT, "agents")),
 	join(ROOT, "README.md"),
-].map((path) => ({ path: relative(ROOT, path), body: readFileSync(path, "utf8") }));
+].map((path) => ({ path: relative(ROOT, path).replaceAll("\\", "/"), body: readFileSync(path, "utf8") }));
 
 const dispatchPattern = /\bagent:\s*\\?["']([a-z][a-z0-9-]*)\\?["']/g;
 const obsoleteToolName = ["pstack", "task"].join("_");
